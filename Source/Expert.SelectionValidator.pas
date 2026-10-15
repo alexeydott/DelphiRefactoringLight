@@ -57,6 +57,11 @@ function WrittenIdentifiersIn(const ALines: TArray<string>): TArray<string>;
 ///  code that does not compile (audit #39, L7e).</summary>
 function MethodNameProblem(const AName: string): string;
 
+/// <summary>The same for any declared name: AWhat names the thing in the
+///  message ('method', 'constant'), so one check serves every feature that
+///  asks the user for an identifier.</summary>
+function DeclarationNameProblem(const AName, AWhat: string): string;
+
 implementation
 
 uses
@@ -719,9 +724,14 @@ end;
 
 function MethodNameProblem(const AName: string): string;
 begin
-  if Trim(AName) = '' then Exit('Enter a method name.');
+  Result := DeclarationNameProblem(AName, 'method');
+end;
+
+function DeclarationNameProblem(const AName, AWhat: string): string;
+begin
+  if Trim(AName) = '' then Exit(Format('Enter a %s name.', [AWhat]));
   if AName <> Trim(AName) then
-    Exit('The method name must not start or end with a space.');
+    Exit(Format('The %s name must not start or end with a space.', [AWhat]));
   if not IsIdentifier(AName) then
     Exit(Format('"%s" is not a valid Pascal identifier.', [AName]));
   if TIdentifierChecker.IsPascalKeyword(AName) then

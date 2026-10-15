@@ -220,6 +220,12 @@ function MethodEditIssue(AKind: TMethodEditIssueKind;
 ///  at top level - the candidates for a move target.</summary>
 function ClassNamesOf(const ALines: TArray<string>): TArray<string>;
 
+/// <summary>The lines of ATYPE's declaration body - AFirst is its header,
+///  ALast its closing 'end;'. Exported because "declare as constant" puts a
+///  class const inside it (forum idea 2026-10-15).</summary>
+function ClassBodyRange(const ALines: TArray<string>; const AType: string;
+  out AFirst, ALast: Integer): Boolean;
+
 /// <summary>Is ATYPE declared with the 'class' keyword (not a record, not a
 ///  plain object)? A record IS a legitimate target, so this only picks the
 ///  default the dialog preselects.</summary>

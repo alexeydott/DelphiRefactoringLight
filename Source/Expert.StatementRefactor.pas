@@ -67,6 +67,57 @@ function InferCleanup(const APrevStatement: string): string;
 function PlanWrapTryFinally(const ALines: TArray<string>; AFirst0, ALast0: Integer;
   const ACleanup: string; out ANewLines: TArray<string>; out AWhy: string): Boolean;
 
+type
+  /// <summary>What the selection is, as far as a declaration cares. A
+  ///  literal EXPRESSION ("2 * 1024") counts as its literals' kind; mixing
+  ///  strings and numbers, or naming any identifier, is dvOther - a const
+  ///  may only hold a constant expression, and an identifier that is in
+  ///  scope at the use site need not be in scope where the declaration
+  ///  goes.</summary>
+  TDeclareValueKind = (dvNone, dvNumber, dvString, dvOther);
+
+  /// <summary>Where the declaration goes. dplClass needs an enclosing type,
+  ///  dplLocal an enclosing routine.</summary>
+  TDeclarePlace = (dplLocal, dplClass, dplInterface, dplImplementation);
+
+  /// <summary>Which section. dsResourceString exists at UNIT level only and
+  ///  takes a string literal - that is Delphi's rule, not ours.</summary>
+  TDeclareSection = (dsConst, dsResourceString);
+
+  TDeclarePlan = record
+    InsertLine0: Integer;      // 0-based line the declaration is inserted at
+    DeclText: string;          // what is inserted, line breaks included
+    NewLines: TArray<string>;  // the whole unit after the edit
+    Replaced: Integer;         // occurrences that became the name
+    Note: string;              // '' or what the user should know
+  end;
+
+/// <summary>What ASelection could be declared as. Numbers, strings, char
+///  literals and expressions built from them only - see
+///  TDeclareValueKind.</summary>
+function ClassifyDeclareValue(const ASelection: string): TDeclareValueKind;
+
+/// <summary>A name to offer for a constant holding ASelection. A string
+///  gives its own words ('Datei nicht gefunden' -> 'SDateiNichtGefunden'),
+///  a number takes the identifier it is assigned to or compared with
+///  (AContextBefore, the code left of the selection: 'Timeout := ' ->
+///  'CTimeout'), else 'CValue'.</summary>
+function SuggestConstantName(const ASelection, AContextBefore: string;
+  AKind: TDeclareValueKind): string;
+
+/// <summary>Declares the single-line selection [AStartCol0, AEndCol0) on
+///  ALine0 as a constant and puts AName in its place. AType is the Pascal
+///  type ('' = untyped, which is what a const usually wants).
+///  AReplaceAll also replaces every other occurrence of the SAME literal -
+///  in the enclosing routine for dplLocal, in the whole unit otherwise;
+///  only in code, and only whole literals, so 100 never matches inside
+///  1000. False with AWhy for everything that would not compile or would
+///  change the meaning.</summary>
+function PlanDeclareFromSelection(const ALines: TArray<string>;
+  ALine0, AStartCol0, AEndCol0: Integer; const AName, AType: string;
+  APlace: TDeclarePlace; ASection: TDeclareSection; AReplaceAll: Boolean;
+  out APlan: TDeclarePlan; out AWhy: string): Boolean;
+
 /// <summary>Editor entry points (IDE and standalone).</summary>
 procedure ExtractVariableAtSelection;
 procedure WrapSelectionInTryFinally;
@@ -76,7 +127,16 @@ implementation
 uses
   System.Classes, System.StrUtils, System.Math, Vcl.Dialogs,
   Expert.EditorHelperIntf, Expert.UnitIndex, Expert.UsesEditor,
-  Expert.AutoImport, Expert.WithScanner, Expert.DialogHelper, Expert.PascalScanner;
+  Expert.AutoImport, Expert.WithScanner, Expert.DialogHelper, Expert.PascalScanner,
+  Expert.IdentifierCheck, Expert.MethodEdit, Expert.SelectionValidator;
+
+// Assigns the reason and answers False, so every refusal below is one
+// line and none of them can forget to say why.
+function SetWhy(out AWhy: string; const AMsg: string): Boolean;
+begin
+  AWhy := AMsg;
+  Result := False;
+end;
 
 function LeadingBlanks(const S: string): string;
 var
@@ -467,6 +527,428 @@ begin
   finally
     SL.Free;
   end;
+end;
+
+// ---------------------------------------------------------------------------
+//  Declare a selection as a constant (forum idea 2026-10-15: "Extract
+//  Constant" for a number, "Extract Resource string" for a string). The
+//  user's own answer is the design and the reason there is ONE function:
+//  "eine einzelne Funktion deklarieren, die eine Selektion automatisch als
+//  Wert uebernimmt. Dann sagt man den Typ und den Ort."
+// ---------------------------------------------------------------------------
+
+function ClassifyDeclareValue(const ASelection: string): TDeclareValueKind;
+var
+  Sc: TPascalScanner;
+  Tok: TPasToken;
+  Numbers, Strings: Integer;
+begin
+  Result := dvNone;
+  if Trim(ASelection) = '' then Exit;
+  // A multi-line literal cannot be judged (and cannot be selected on one
+  // line in the first place).
+  if ASelection.Contains('''''''') then Exit(dvOther);
+  Numbers := 0;
+  Strings := 0;
+  Sc := TPascalScanner.Create(ASelection);
+  try
+    while Sc.Next(Tok) do
+      case Tok.Kind of
+        ptNumber: Inc(Numbers);
+        ptString: Inc(Strings);
+        ptSymbol:
+          // Only what can stand BETWEEN literals of a constant expression.
+          // Anything else (',', ':=', '[') means the selection is not one
+          // value.
+          if (Tok.Text <> '+') and (Tok.Text <> '-') and (Tok.Text <> '*')
+            and (Tok.Text <> '/') and (Tok.Text <> '(') and (Tok.Text <> ')')
+          then
+            Exit(dvOther);
+      else
+        // an identifier, and with it a name that need not be in scope where
+        // the declaration goes
+        Exit(dvOther);
+      end;
+  finally
+    Sc.Free;
+  end;
+  if (Numbers > 0) and (Strings = 0) then Result := dvNumber
+  else if (Strings > 0) and (Numbers = 0) then Result := dvString
+  else if (Numbers > 0) or (Strings > 0) then Result := dvOther;
+end;
+
+// 'Datei nicht gefunden' -> 'DateiNichtGefunden', capped - a name, not a
+// sentence.
+function WordsToPascalCase(const AText: string; AMaxChars: Integer): string;
+var
+  C: Char;
+  AtStart: Boolean;
+begin
+  Result := '';
+  AtStart := True;
+  for C in AText do
+  begin
+    if IsIdentChar(C) and not CharInSet(C, ['0'..'9']) or
+      (not AtStart and CharInSet(C, ['0'..'9'])) then
+    begin
+      if AtStart then Result := Result + UpCase(C) else Result := Result + C;
+      AtStart := False;
+    end
+    else
+      AtStart := True;   // a separator: the next letter starts a word
+    if Length(Result) >= AMaxChars then Break;
+  end;
+end;
+
+function SuggestConstantName(const ASelection, AContextBefore: string;
+  AKind: TDeclareValueKind): string;
+var
+  Core, Ident: string;
+begin
+  if AKind = dvString then
+  begin
+    // The literal says what it means, so use its own words.
+    Core := ASelection;
+    Core := StringReplace(Core, '''', ' ', [rfReplaceAll]);
+    Result := 'S' + WordsToPascalCase(Core, 28);
+    if Result = 'S' then Result := 'SText';
+    Exit;
+  end;
+  // A number says nothing, so the name has to come from the code around it -
+  // and WHICH identifier is the meaning is decided by the separator right
+  // before the number, not by proximity:
+  //   Timeout := 5000     ':='  -> the assignment target
+  //   if I > 5000         '>'   -> what it is compared with
+  //   SetTimeout(5000)    '('   -> the routine it is passed to
+  //   X := Y + 5000       '+'   -> nothing; Y is an operand, not a meaning
+  Ident := '';
+  var Ctx := TrimRight(AContextBefore);
+  var Sep := '';
+  for var Cand in ['(', ':=', '<>', '<=', '>=', '>', '<', '='] do
+    if Ctx.EndsWith(Cand) then
+    begin
+      Sep := Cand;
+      Break;
+    end;
+  if Sep <> '' then
+  begin
+    Ctx := TrimRight(Copy(Ctx, 1, Length(Ctx) - Length(Sep)));
+    var IdentCol: Integer;
+    Ident := IdentifierBefore(Ctx, Length(Ctx) + 1, IdentCol);
+  end;
+  if (Ident <> '') and TIdentifierChecker.IsPascalKeyword(Ident) then Ident := '';
+  // "SetTimeout(" / "GetTimeout(" both mean Timeout.
+  if (Length(Ident) > 4) and (SameText(Copy(Ident, 1, 3), 'Set')
+    or SameText(Copy(Ident, 1, 3), 'Get')) then
+    Ident := Copy(Ident, 4, MaxInt);
+  if Ident = '' then Exit('CValue');
+  Result := 'C' + UpCase(Ident[1]) + Copy(Ident, 2, MaxInt);
+end;
+
+// The token the selection is, or Kind = ptEnd when the selection is not
+// exactly one token of CODE. Scanning the whole content rather than the one
+// line is deliberate: a line inside a { } comment opened further up yields
+// no tokens at all, which is the answer we want there.
+function TokenOfSelection(const AContent: string; ALine0, AStartCol0,
+  AEndCol0: Integer; out APrevKind: TPasTokenKind;
+  out APrevText: string): TPasToken;
+var
+  Sc: TPascalScanner;
+  Tok: TPasToken;
+begin
+  Result := Default(TPasToken);
+  Result.Kind := ptEnd;
+  APrevKind := ptEnd;
+  APrevText := '';
+  Sc := TPascalScanner.Create(AContent);
+  try
+    var PrevK := ptEnd;
+    var PrevT := '';
+    while Sc.Next(Tok) do
+    begin
+      if (Tok.Line = ALine0) and (Tok.Col = AStartCol0)
+        and (Tok.Col + Length(Tok.Text) = AEndCol0) then
+      begin
+        APrevKind := PrevK;
+        APrevText := PrevT;
+        Exit(Tok);
+      end;
+      if (Tok.Line > ALine0) then Break;
+      PrevK := Tok.Kind;
+      PrevT := Tok.Text;
+    end;
+  finally
+    Sc.Free;
+  end;
+end;
+
+// Every occurrence of exactly this literal in [AFrom, ATo], as (line, col)
+// pairs. Only complete tokens, so 100 never matches inside 1000, and only
+// code, because a comment produces no token.
+function LiteralOccurrences(const AContent: string; const AText: string;
+  AFrom, ATo: Integer): TArray<TPasToken>;
+var
+  Sc: TPascalScanner;
+  Tok: TPasToken;
+begin
+  Result := nil;
+  Sc := TPascalScanner.Create(AContent);
+  try
+    while Sc.Next(Tok) do
+      if (Tok.Line >= AFrom) and (Tok.Line <= ATo) and (Tok.Text = AText)
+        and (Tok.Kind in [ptNumber, ptString]) then
+        Result := Result + [Tok];
+  finally
+    Sc.Free;
+  end;
+end;
+
+// The last line of the top-level section AKeyword inside [AFrom, ATo], or
+// -1. A section ends at the next top-level keyword.
+function UnitSectionEnd(const ALines: TArray<string>; const AKeyword: string;
+  AFrom, ATo: Integer): Integer;
+const
+  Enders: array[0..12] of string = ('TYPE', 'CONST', 'VAR', 'RESOURCESTRING',
+    'THREADVAR', 'PROCEDURE', 'FUNCTION', 'CLASS', 'IMPLEMENTATION',
+    'INTERFACE', 'INITIALIZATION', 'FINALIZATION', 'END.');
+var
+  I, J, Last: Integer;
+  T, U: string;
+
+  function TopLevel(ALine: Integer): Boolean;
+  begin
+    Result := Length(ALines[ALine]) - Length(TrimLeft(ALines[ALine])) <= 2;
+  end;
+
+  function StartsAnother(const AUpper: string): Boolean;
+  var
+    E: string;
+  begin
+    for E in Enders do
+      if (AUpper = E) or AUpper.StartsWith(E + ' ') then Exit(True);
+    Result := False;
+  end;
+
+begin
+  Result := -1;
+  for I := Max(0, AFrom) to Min(High(ALines), ATo) do
+  begin
+    T := Trim(StripLineComment(ALines[I]));
+    U := UpperCase(T);
+    if not TopLevel(I) then Continue;
+    if (U = UpperCase(AKeyword)) or U.StartsWith(UpperCase(AKeyword) + ' ') then
+    begin
+      // walk to the end of THIS section
+      Last := I;
+      for J := I + 1 to Min(High(ALines), ATo) do
+      begin
+        T := Trim(StripLineComment(ALines[J]));
+        U := UpperCase(T);
+        if (T <> '') and TopLevel(J) and StartsAnother(U) then Break;
+        if T <> '' then Last := J;
+      end;
+      Result := Last;
+    end;
+  end;
+end;
+
+// Where a NEW top-level section goes in [AFrom, ATo]: before the first
+// type / var / routine, which is also where a constant must stand when a
+// type below it uses it.
+function UnitSectionAnchor(const ALines: TArray<string>; AFrom,
+  ATo: Integer): Integer;
+var
+  I, Stop: Integer;
+  T, U: string;
+begin
+  Stop := Min(High(ALines), ATo);
+  Result := Min(High(ALines) + 1, Max(0, AFrom));
+  I := Max(0, AFrom);
+  while I <= Stop do
+  begin
+    T := Trim(StripLineComment(ALines[I]));
+    U := UpperCase(T);
+    if T = '' then
+    begin
+      Inc(I);
+      Continue;
+    end;
+    // skip the section's own uses clause - it may wrap over lines
+    if U.StartsWith('USES') then
+    begin
+      while (I <= Stop) and (Pos(';', StripLineComment(ALines[I])) = 0) do Inc(I);
+      Inc(I);
+      Result := I;
+      Continue;
+    end;
+    if (U = 'TYPE') or U.StartsWith('TYPE ') or (U = 'VAR') or U.StartsWith('VAR ')
+      or (U = 'CONST') or U.StartsWith('CONST ') or (U = 'RESOURCESTRING')
+      or U.StartsWith('PROCEDURE ') or U.StartsWith('FUNCTION ')
+      or U.StartsWith('CLASS ') or (U = 'IMPLEMENTATION') or (U = 'END.') then
+      Exit(I);
+    Inc(I);
+  end;
+end;
+
+function PlanDeclareFromSelection(const ALines: TArray<string>;
+  ALine0, AStartCol0, AEndCol0: Integer; const AName, AType: string;
+  APlace: TDeclarePlace; ASection: TDeclareSection; AReplaceAll: Boolean;
+  out APlan: TDeclarePlan; out AWhy: string): Boolean;
+var
+  Content, Value, Decl, Keyword, Problem: string;
+  Kind: TDeclareValueKind;
+  Tok: TPasToken;
+  PrevKind: TPasTokenKind;
+  PrevText: string;
+  Lines: TArray<string>;
+  Hits: TArray<TPasToken>;
+  First, Last, InsLine, I: Integer;
+begin
+  // No "Result := False" here: every refusal below goes through SetWhy,
+  // which answers False - so a path that forgets the reason cannot compile
+  // as a silent failure either.
+  APlan := Default(TDeclarePlan);
+  APlan.InsertLine0 := -1;
+  AWhy := '';
+  if (ALine0 < 0) or (ALine0 > High(ALines)) then Exit(SetWhy(AWhy, 'the line is not in this file'));
+  if (AStartCol0 < 0) or (AEndCol0 <= AStartCol0) then Exit(SetWhy(AWhy, 'nothing is selected'));
+
+  Content := string.Join(#10, ALines);
+  Value := Copy(ALines[ALine0], AStartCol0 + 1, AEndCol0 - AStartCol0);
+  if Trim(Value) = '' then Exit(SetWhy(AWhy, 'nothing is selected'));
+
+  // --- the selection must be ONE literal of code ---------------------------
+  Tok := TokenOfSelection(Content, ALine0, AStartCol0, AEndCol0, PrevKind, PrevText);
+  if Tok.Kind = ptEnd then
+  begin
+    // A selected unary minus together with its number is two tokens, and
+    // whether the minus belongs to the value depends on what stands before
+    // it - that is a question the user should answer, not us.
+    if (Length(Value) > 1) and (Value[1] = '-') then
+      Exit(SetWhy(AWhy, 'the minus may belong to the expression - select the number itself'));
+    Exit(SetWhy(AWhy, 'select exactly one number or string literal (and not inside a comment)'));
+  end;
+  if not (Tok.Kind in [ptNumber, ptString]) then
+    Exit(SetWhy(AWhy, 'only a number or a string literal can become a constant'));
+  Kind := ClassifyDeclareValue(Value);
+  if not (Kind in [dvNumber, dvString]) then
+    Exit(SetWhy(AWhy, 'the selection is not a single literal value'));
+
+  // --- the name ------------------------------------------------------------
+  Problem := DeclarationNameProblem(AName, 'constant');
+  if Problem <> '' then Exit(SetWhy(AWhy, Problem));
+
+  // --- what Delphi allows where --------------------------------------------
+  if ASection = dsResourceString then
+  begin
+    if Kind <> dvString then
+      Exit(SetWhy(AWhy, 'a resourcestring holds a string - select a string literal'));
+    if not (APlace in [dplInterface, dplImplementation]) then
+      Exit(SetWhy(AWhy, 'a resourcestring can only be declared at unit level'));
+    if Trim(AType) <> '' then
+      Exit(SetWhy(AWhy, 'a resourcestring has no type of its own'));
+    Keyword := 'resourcestring';
+  end
+  else
+    Keyword := 'const';
+
+  if Trim(AType) <> '' then
+    Decl := AName + ': ' + Trim(AType) + ' = ' + Value
+  else
+    Decl := AName + ' = ' + Value;
+
+  // --- is the name free where it would be declared? ------------------------
+  if APlace = dplLocal then
+  begin
+    if not FindEnclosingRoutineRange(Content, ALine0, First, Last) then
+      Exit(SetWhy(AWhy, 'the selection is not inside a routine'));
+    // Conservative on purpose: any whole-word occurrence inside the routine
+    // refuses, which at worst costs the user a different name - a duplicate
+    // identifier would cost a unit that does not compile.
+    if Length(CodeWordLines(Copy(ALines, First, Last - First + 1), AName)) > 0 then
+      Exit(SetWhy(AWhy, Format('"%s" already occurs in this routine', [AName])));
+  end
+  else if Length(CodeWordLines(ALines, AName)) > 0 then
+    Exit(SetWhy(AWhy, Format('"%s" already occurs in this unit', [AName])));
+
+  // --- replace, then insert ------------------------------------------------
+  Lines := Copy(ALines);
+  if AReplaceAll then
+  begin
+    if APlace = dplLocal then
+      Hits := LiteralOccurrences(Content, Value, First, Last)
+    else
+      Hits := LiteralOccurrences(Content, Value, 0, High(ALines));
+  end
+  else
+    Hits := [Tok];
+  // right to left per line, so the columns stay valid
+  for I := High(Hits) downto 0 do
+  begin
+    var H := Hits[I];
+    if (H.Line < 0) or (H.Line > High(Lines)) then Continue;
+    Lines[H.Line] := Copy(Lines[H.Line], 1, H.Col) + AName +
+      Copy(Lines[H.Line], H.Col + Length(H.Text) + 1, MaxInt);
+    Inc(APlan.Replaced);
+  end;
+  if APlan.Replaced > 1 then
+    APlan.Note := Format('%d occurrences of %s replaced', [APlan.Replaced, Value]);
+
+  case APlace of
+    dplLocal:
+      if not PlanLocalDecl(Lines, ALine0, Keyword, Decl, InsLine, APlan.DeclText) then
+        Exit(SetWhy(AWhy, 'no place for a local const (a nested routine before the body?)'));
+    dplClass:
+      begin
+        if not FindEnclosingRoutineRange(Content, ALine0, First, Last) then
+          Exit(SetWhy(AWhy, 'the selection is not inside a method'));
+        var Owner := OwnerTypeOfImplHeader(Lines[First]);
+        if Owner = '' then
+          Exit(SetWhy(AWhy, 'the enclosing routine is no method of a class'));
+        var CFirst, CLast: Integer;
+        if not ClassBodyRange(Lines, Owner, CFirst, CLast) then
+          Exit(SetWhy(AWhy, Format('the declaration of %s was not found in this unit', [Owner])));
+        var FirstDecl: Integer;
+        if not PlanMemberInsertion(Lines, CFirst, 'private',
+          [Keyword + ' ' + Decl + ';'], InsLine, APlan.DeclText, FirstDecl) then
+          Exit(SetWhy(AWhy, Format('no place for a const inside %s', [Owner])));
+      end;
+  else
+    begin
+      var ImplLine := ImplementationLineOf(Lines);
+      if APlace = dplInterface then
+      begin
+        First := 0;
+        Last := ImplLine - 1;
+      end
+      else
+      begin
+        if ImplLine > High(Lines) then
+          Exit(SetWhy(AWhy, 'this unit has no implementation section'));
+        First := ImplLine + 1;
+        Last := High(Lines);
+      end;
+      var SecEnd := UnitSectionEnd(Lines, Keyword, First, Last);
+      if SecEnd >= 0 then
+      begin
+        // append to the section that is already there
+        InsLine := SecEnd + 1;
+        APlan.DeclText := '  ' + Decl + ';' + sLineBreak;
+      end
+      else
+      begin
+        InsLine := UnitSectionAnchor(Lines, First, Last);
+        APlan.DeclText := Keyword + sLineBreak + '  ' + Decl + ';' + sLineBreak +
+          sLineBreak;
+      end;
+    end;
+  end;
+
+  APlan.InsertLine0 := InsLine;
+  APlan.NewLines := Copy(Lines, 0, InsLine) +
+    SplitEditorLines(APlan.DeclText.TrimRight([#13, #10])) +
+    Copy(Lines, InsLine, Length(Lines) - InsLine);
+  Result := True;
 end;
 
 procedure ExtractVariableAtSelection;

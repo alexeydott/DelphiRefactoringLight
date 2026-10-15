@@ -671,6 +671,25 @@ type
     [Test] procedure WhatWasActedOnIsNeverCutFromTheAnswer;
   end;
 
+  /// <summary>Forum idea 2026-10-15 ("Extract Constant" for a number,
+  ///  "Extract Resource string" for a string) in the shape the user chose:
+  ///  ONE function that takes the selection as the value and is told the
+  ///  type and the place.</summary>
+  [TestFixture]
+  TDeclareConstantTests = class
+  private
+    function Unit1: TArray<string>;
+    function ColOf(const ALine, AText: string): Integer;
+    function Occurrences(const AText, AWhat: string): Integer;
+  public
+    [Test] procedure OnlyALiteralCanBecomeAConstant;
+    [Test] procedure TheNameIsOfferedFromWhatTheValueMeans;
+    [Test] procedure ALocalConstantLandsInItsOwnSection;
+    [Test] procedure AResourceStringIsAUnitLevelStringOnly;
+    [Test] procedure AUnitConstantJoinsTheSectionThatIsThere;
+    [Test] procedure WhatWouldNotCompileIsRefusedWithAReason;
+  end;
+
   /// <summary>Forum report 2026-10-15: Delphi had been installed by an admin
   ///  account, so rsvars.bat and the registry name THAT account's Documents
   ///  folder as the common directory - and every build of a user without
@@ -736,7 +755,7 @@ uses
   Expert.MoveToUnit, Expert.SafeDeletePlan, Expert.McpTools, Expert.WithRewriter,
   Expert.SemanticReplace, Expert.SelectionValidator, Expert.ExtractMethod,
   Expert.SignatureEdit, Expert.MethodEdit, System.StrUtils,
-  Expert.DebugConsistency, DIH.Placeholders;
+  Expert.DebugConsistency, DIH.Placeholders, Expert.StatementRefactor;
 
 const
   NL = sLineBreak;
@@ -5512,6 +5531,245 @@ begin
     [LowerCase(Issues[0].Id)]))), 'a known id in another case is known');
 end;
 
+{ TDeclareConstantTests }
+
+// The fixture every case works on: a number used twice in one routine, a
+// string literal, and a magic number in a second routine.
+function TDeclareConstantTests.Unit1: TArray<string>;
+begin
+  Result := [
+    'unit U1;',                                    //  0
+    '',                                            //  1
+    'interface',                                   //  2
+    '',                                            //  3
+    'uses',                                        //  4
+    '  System.SysUtils;',                          //  5
+    '',                                            //  6
+    'type',                                        //  7
+    '  TWorker = class',                           //  8
+    '  private',                                   //  9
+    '    FCount: Integer;',                        // 10
+    '  public',                                    // 11
+    '    procedure Run;',                          // 12
+    '  end;',                                      // 13
+    '',                                            // 14
+    'implementation',                              // 15
+    '',                                            // 16
+    'procedure TWorker.Run;',                      // 17
+    'var',                                         // 18
+    '  I: Integer;',                               // 19
+    'begin',                                       // 20
+    '  Timeout := 5000;',                          // 21
+    '  if I > 5000 then',                           // 22
+    '    ShowMessage(''Datei nicht gefunden'');',  // 23
+    '  // 5000 in a comment stays',                // 24
+    'end;',                                        // 25
+    '',                                            // 26
+    'end.',                                        // 27
+    ''];                                           // 28
+end;
+
+function TDeclareConstantTests.Occurrences(const AText, AWhat: string): Integer;
+var
+  P: Integer;
+begin
+  Result := 0;
+  P := Pos(AWhat, AText);
+  while P > 0 do
+  begin
+    Inc(Result);
+    P := Pos(AWhat, AText, P + Length(AWhat));
+  end;
+end;
+
+function TDeclareConstantTests.ColOf(const ALine, AText: string): Integer;
+begin
+  Result := Pos(AText, ALine) - 1;
+  Assert.IsTrue(Result >= 0, 'the fixture must contain ' + AText);
+end;
+
+procedure TDeclareConstantTests.OnlyALiteralCanBecomeAConstant;
+begin
+  Assert.AreEqual(Integer(Ord(dvNumber)), Integer(Ord(ClassifyDeclareValue('5000'))));
+  Assert.AreEqual(Integer(Ord(dvNumber)), Integer(Ord(ClassifyDeclareValue('$FF'))));
+  Assert.AreEqual(Integer(Ord(dvNumber)), Integer(Ord(ClassifyDeclareValue('2 * 1024'))),
+    'a constant EXPRESSION of numbers is a number');
+  Assert.AreEqual(Integer(Ord(dvString)), Integer(Ord(ClassifyDeclareValue('''abc'''))));
+  Assert.AreEqual(Integer(Ord(dvString)), Integer(Ord(ClassifyDeclareValue('''a'' + ''b'''))));
+  Assert.AreEqual(Integer(Ord(dvString)), Integer(Ord(ClassifyDeclareValue('#13#10'))));
+  // An identifier would have to be in scope where the DECLARATION goes,
+  // which is not the same place as the use site.
+  Assert.AreEqual(Integer(Ord(dvOther)), Integer(Ord(ClassifyDeclareValue('2 * Factor'))),
+    'an identifier is not a literal');
+  Assert.AreEqual(Integer(Ord(dvOther)), Integer(Ord(ClassifyDeclareValue('1, 2'))),
+    'two values are not one value');
+  Assert.AreEqual(Integer(Ord(dvOther)), Integer(Ord(ClassifyDeclareValue('''a'' + 1'))),
+    'a string and a number together are neither');
+  Assert.AreEqual(Integer(Ord(dvNone)), Integer(Ord(ClassifyDeclareValue('   '))));
+end;
+
+procedure TDeclareConstantTests.TheNameIsOfferedFromWhatTheValueMeans;
+begin
+  // A string says what it means, so it names itself.
+  Assert.AreEqual('SDateiNichtGefunden',
+    SuggestConstantName('''Datei nicht gefunden''', '', dvString));
+  Assert.AreEqual('SText', SuggestConstantName('''...''', '', dvString),
+    'a literal with no words at all still gives a usable name');
+  // A number says nothing, so it is named after what it is assigned to.
+  Assert.AreEqual('CTimeout', SuggestConstantName('5000', '  Timeout := ', dvNumber));
+  Assert.AreEqual('CTimeout', SuggestConstantName('5000', '  SetTimeout(', dvNumber),
+    'Set/Get is not part of the meaning');
+  Assert.AreEqual('CLimit', SuggestConstantName('5000', '  if Limit > ', dvNumber),
+    'a comparison names what is compared');
+  Assert.AreEqual('CValue', SuggestConstantName('5000', '  X := Y + ', dvNumber), 'without an identifier to the left there is nothing to go on');
+end;
+
+procedure TDeclareConstantTests.ALocalConstantLandsInItsOwnSection;
+var
+  Lines: TArray<string>;
+  Plan: TDeclarePlan;
+  Why: string;
+  Col: Integer;
+begin
+  Lines := Unit1;
+  Col := ColOf(Lines[21], '5000');
+  Assert.IsTrue(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'CTimeout', '',
+    dplLocal, dsConst, False, Plan, Why), Why);
+  var Text := string.Join(#10, Plan.NewLines);
+  // The routine already has a VAR section, so the const needs its own - a
+  // const cannot be added under a var.
+  Assert.IsTrue(Text.Contains('const' + #10 + '  CTimeout = 5000;'),
+    'a const section of its own: ' + Plan.DeclText);
+  Assert.IsTrue(Text.Contains('  Timeout := CTimeout;'), 'the value is replaced');
+  Assert.IsTrue(Text.Contains('  if I > 5000 then'),
+    'and ONLY the selected occurrence, because replace-all was off');
+  Assert.AreEqual(1, Plan.Replaced);
+  // ...and with replace-all the second use goes too, but the one in the
+  // comment never does.
+  Assert.IsTrue(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'CTimeout', '',
+    dplLocal, dsConst, True, Plan, Why), Why);
+  Text := string.Join(#10, Plan.NewLines);
+  Assert.AreEqual(2, Plan.Replaced, 'both uses in the routine');
+  Assert.IsTrue(Text.Contains('  if I > CTimeout then'), 'the second use too');
+  Assert.IsTrue(Text.Contains('// 5000 in a comment stays'),
+    'a comment is not code');
+end;
+
+procedure TDeclareConstantTests.AResourceStringIsAUnitLevelStringOnly;
+var
+  Lines: TArray<string>;
+  Plan: TDeclarePlan;
+  Why: string;
+  Col: Integer;
+begin
+  Lines := Unit1;
+  Col := ColOf(Lines[23], '''Datei');
+  // What Delphi allows: a string, at unit level, untyped.
+  Assert.IsTrue(PlanDeclareFromSelection(Lines, 23, Col,
+    Col + Length('''Datei nicht gefunden'''), 'SNotFound', '',
+    dplImplementation, dsResourceString, False, Plan, Why), Why);
+  var Text := string.Join(#10, Plan.NewLines);
+  Assert.IsTrue(Text.Contains('resourcestring' + #10 +
+    '  SNotFound = ''Datei nicht gefunden'';'), 'the section is created: ' + Plan.DeclText);
+  Assert.IsTrue(Text.Contains('ShowMessage(SNotFound);'), 'and used at the site');
+  // ...and what it does not.
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 23, Col,
+    Col + Length('''Datei nicht gefunden'''), 'SNotFound', '',
+    dplLocal, dsResourceString, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('unit level'), Why);
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 23, Col,
+    Col + Length('''Datei nicht gefunden'''), 'SNotFound', 'string',
+    dplImplementation, dsResourceString, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('no type'), Why);
+  Col := ColOf(Lines[21], '5000');
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'SNotFound', '',
+    dplImplementation, dsResourceString, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('string literal'), Why);
+end;
+
+procedure TDeclareConstantTests.WhatWouldNotCompileIsRefusedWithAReason;
+var
+  Lines: TArray<string>;
+  Plan: TDeclarePlan;
+  Why: string;
+  Col: Integer;
+begin
+  Lines := Unit1;
+  Col := ColOf(Lines[21], '5000');
+
+  // A name that is not a name.
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'begin', '',
+    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('reserved word'), Why);
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, '2Foo', '',
+    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('identifier'), Why);
+
+  // A name that is taken: at unit level the whole unit counts, locally the
+  // routine - and "I" is a local of exactly this routine.
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'I', '',
+    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('already occurs'), Why);
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'FCount', '',
+    dplInterface, dsConst, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('already occurs'), Why);
+
+  // The number in the COMMENT is not code.
+  var CCol := ColOf(Lines[24], '5000');
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 24, CCol, CCol + 4, 'CX', '',
+    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('comment'), Why);
+
+  // Half a literal is not a literal.
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 2, 'CX', '',
+    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('exactly one'), Why);
+
+  // Nothing selected.
+  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col, 'CX', '',
+    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsTrue(Why.Contains('nothing is selected'), Why);
+end;
+
+procedure TDeclareConstantTests.AUnitConstantJoinsTheSectionThatIsThere;
+var
+  Lines: TArray<string>;
+  Plan: TDeclarePlan;
+  Why: string;
+  Col: Integer;
+begin
+  // A unit that already has an implementation const section: the new
+  // declaration joins it instead of opening a second one.
+  Lines := [
+    'unit U2;',                       // 0
+    'interface',                      // 1
+    'implementation',                 // 2
+    '',                               // 3
+    'const',                          // 4
+    '  CFirst = 1;',                  // 5
+    '',                               // 6
+    'procedure Go;',                  // 7
+    'begin',                          // 8
+    '  Sleep(250);',                  // 9
+    'end;',                           // 10
+    '',                               // 11
+    'end.',                           // 12
+    ''];
+  Col := ColOf(Lines[9], '250');
+  Assert.IsTrue(PlanDeclareFromSelection(Lines, 9, Col, Col + 3, 'CDelay', '',
+    dplImplementation, dsConst, False, Plan, Why), Why);
+  var Text := string.Join(#10, Plan.NewLines);
+  Assert.AreEqual(1, Occurrences(Text, 'const'), 'no second const section');
+  Assert.IsTrue(Text.Contains('  CFirst = 1;' + #10 + '  CDelay = 250;'),
+    'it joins the one that is there: ' + Text);
+  Assert.IsTrue(Text.Contains('  Sleep(CDelay);'));
+  // A typed one is written as a typed constant.
+  Assert.IsTrue(PlanDeclareFromSelection(Lines, 9, Col, Col + 3, 'CDelay',
+    'Cardinal', dplImplementation, dsConst, False, Plan, Why), Why);
+  Assert.IsTrue(string.Join(#10, Plan.NewLines).Contains('  CDelay: Cardinal = 250;'),
+    Plan.DeclText);
+end;
+
 { TInstallOutputRootTests }
 
 procedure TInstallOutputRootTests.ABuildNeverWritesWhereItMayNot;
@@ -5911,6 +6169,7 @@ initialization
   TDUnitX.RegisterTestFixture(TDfmAliasOnlyTests);
   TDUnitX.RegisterTestFixture(TLineEndingCheckTests);
   TDUnitX.RegisterTestFixture(TInstallOutputRootTests);
+  TDUnitX.RegisterTestFixture(TDeclareConstantTests);
   TDUnitX.RegisterTestFixture(TCheckScopeTests);
   TDUnitX.RegisterTestFixture(TExtractAndCompletionTests);
 

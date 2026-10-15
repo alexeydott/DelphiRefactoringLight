@@ -139,6 +139,17 @@ function PlanLocalVarDecl(const ALines: TArray<string>; AUseLine0: Integer;
   const AIdent, AType: string; out AInsertLine0: Integer;
   out AText: string): Boolean;
 
+/// <summary>The same for ANY declaration section of the enclosing routine:
+///  AKeyword is 'var' / 'const' / 'type', ABody the declaration itself
+///  ("X: Integer" / "CMax = 100"). The body is appended to an existing
+///  section only when THAT keyword's section is the last one before
+///  'begin' - otherwise a new section line is written, because a 'const'
+///  cannot be added under a 'var'. PlanLocalVarDecl is this with
+///  'var'.</summary>
+function PlanLocalDecl(const ALines: TArray<string>; AUseLine0: Integer;
+  const AKeyword, ABody: string; out AInsertLine0: Integer;
+  out AText: string): Boolean;
+
 /// <summary>Executes one quick fix. AUnitChoice picks the candidate unit
 ///  for qfAddUnit (index into UnitNames).</summary>
 function ApplyQuickFix(const AFile: string; const AFix: TQuickFix;
@@ -1227,14 +1238,27 @@ end;
 function PlanLocalVarDecl(const ALines: TArray<string>; AUseLine0: Integer;
   const AIdent, AType: string; out AInsertLine0: Integer;
   out AText: string): Boolean;
-var
-  First, Last, HdrEnd, BeginLine, LastSect, Bal, I: Integer;
-  T, U, Indent: string;
 begin
   Result := False;
   AInsertLine0 := -1;
   AText := '';
   if (AIdent = '') or (AType = '') then Exit;
+  Result := PlanLocalDecl(ALines, AUseLine0, 'var', AIdent + ': ' + AType,
+    AInsertLine0, AText);
+end;
+
+function PlanLocalDecl(const ALines: TArray<string>; AUseLine0: Integer;
+  const AKeyword, ABody: string; out AInsertLine0: Integer;
+  out AText: string): Boolean;
+var
+  First, Last, HdrEnd, BeginLine, Bal, I: Integer;
+  T, U, Indent, LastSect, Want: string;
+begin
+  Result := False;
+  AInsertLine0 := -1;
+  AText := '';
+  if (AKeyword = '') or (Trim(ABody) = '') then Exit;
+  Want := UpperCase(AKeyword);
   if (AUseLine0 < 0) or (AUseLine0 > High(ALines)) then Exit;
   if not FindEnclosingRoutineRange(string.Join(sLineBreak, ALines), AUseLine0,
     First, Last) then Exit;
@@ -1253,7 +1277,7 @@ begin
     end;
   end;
   BeginLine := -1;
-  LastSect := 0;   // 0 none, 1 var, 2 const/type/label
+  LastSect := '';   // the keyword of the section standing closest to 'begin'
   for I := HdrEnd + 1 to Min(Last, AUseLine0) do
   begin
     T := Trim(DvStripComment(ALines[I]));
@@ -1268,19 +1292,19 @@ begin
     var K: string;
     var CM: Boolean;
     if IsHeaderLine(T, K, CM) then Exit;
-    if (U = 'VAR') or U.StartsWith('VAR ') then LastSect := 1
-    else if (U = 'CONST') or U.StartsWith('CONST ') or (U = 'TYPE')
-      or U.StartsWith('TYPE ') or (U = 'LABEL') or U.StartsWith('LABEL ') then
-      LastSect := 2;
+    if (U = 'VAR') or U.StartsWith('VAR ') then LastSect := 'VAR'
+    else if (U = 'CONST') or U.StartsWith('CONST ') then LastSect := 'CONST'
+    else if (U = 'TYPE') or U.StartsWith('TYPE ') then LastSect := 'TYPE'
+    else if (U = 'LABEL') or U.StartsWith('LABEL ') then LastSect := 'LABEL';
   end;
   if (BeginLine < 0) or (BeginLine >= AUseLine0) then Exit;
   Indent := Copy(ALines[BeginLine], 1,
     Length(ALines[BeginLine]) - Length(TrimLeft(ALines[BeginLine])));
-  if LastSect = 1 then
-    AText := Indent + '  ' + AIdent + ': ' + AType + ';' + sLineBreak
+  if LastSect = Want then
+    AText := Indent + '  ' + Trim(ABody) + ';' + sLineBreak
   else
-    AText := Indent + 'var' + sLineBreak +
-      Indent + '  ' + AIdent + ': ' + AType + ';' + sLineBreak;
+    AText := Indent + LowerCase(AKeyword) + sLineBreak +
+      Indent + '  ' + Trim(ABody) + ';' + sLineBreak;
   AInsertLine0 := BeginLine;
   Result := True;
 end;
