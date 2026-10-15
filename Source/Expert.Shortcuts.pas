@@ -26,7 +26,9 @@ uses
 type
   TShortcutKind = (skRename, skCompletion, skExtract, skFindRef, skFindImp, skAlign, skRemoveWith, skUnitRefs, skMoveToUnit, skFindOriginal,
     // issue #11 ("more shortcut kinds"): the refactorings that were menu-only
-    skChangeSignature, skSafeDelete, skExtractVariable, skWrapTryFinally, skConvertProperties);
+    skChangeSignature, skSafeDelete, skExtractVariable, skWrapTryFinally, skConvertProperties,
+    // forum idea 2026-10-15: declare a selection (or nothing) as a constant
+    skDeclareConstant);
 
   TShortcutChangedProc = procedure of object;
 
@@ -110,7 +112,8 @@ const
     TShortCut(vkD     or scAlt or scCtrl or scShift),   // safe Delete
     TShortCut(vkV     or scAlt or scCtrl or scShift),   // extract Variable
     TShortCut(vkT     or scAlt or scCtrl or scShift),   // wrap in Try..finally
-    TShortCut(vkP     or scAlt or scCtrl or scShift)    // convert Properties
+    TShortCut(vkP     or scAlt or scCtrl or scShift),   // convert Properties
+    TShortCut(vkC     or scAlt or scCtrl or scShift)    // declare Constant
   );
 
   ValueNames: array[TShortcutKind] of string = (
@@ -118,7 +121,7 @@ const
     'FindReferences', 'FindImplementations', 'AlignSignature',
     'RemoveWith', 'UnitReferences', 'MoveToUnit', 'FindOriginalSymbol',
     'ChangeSignature', 'SafeDelete', 'ExtractVariable', 'WrapTryFinally',
-    'ConvertProperties'
+    'ConvertProperties', 'DeclareConstant'
   );
 
   DisplayNames: array[TShortcutKind] of string = (
@@ -136,7 +139,8 @@ const
     'Safe delete',
     'Extract variable',
     'Wrap in try..finally',
-    'Convert properties'
+    'Convert properties',
+    'Declare as constant'
   );
 
 { TExpertsShortCut }

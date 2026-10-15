@@ -1074,6 +1074,20 @@ const
     'previous call - the declarations that get a new GUID. Required for apply."},' +
     ApplyProp + ',' + InstanceProp + '}}}' +
     ',' +
+    '{"name":"declare_constant","description":"Declares a number or a string literal as a const or a resourcestring and puts the name in its place. Pass literal (or column + end_column) to replace something that is there, or neither plus value to define one from scratch - the line is then only the anchor that says which routine or class local and class mean. The value must be a literal or an expression of literals; a name in it is refused, because it need not be in scope where the declaration goes."' + ',"inputSchema":{"type":"object","properties":' +
+    '{"file":{"type":"string","description":"The unit."},' +
+    '"line":{"type":"integer","description":"1-based line of the literal, or of the caret."},' +
+    '"literal":{"type":"string","description":"The literal to replace, located on that line as code."},' +
+    '"column":{"type":"integer","description":"1-based column; with end_column instead of literal."},' +
+    '"end_column":{"type":"integer","description":"1-based, end exclusive."},' +
+    '"value":{"type":"string","description":"What is declared. Defaults to the literal; pass it to declare something else (or from scratch)."},' +
+    '"name":{"type":"string","description":"The constant name. Suggested from the value when omitted."},' +
+    '"type":{"type":"string","description":"Pascal type; omitted = untyped, which is what a const usually wants."},' +
+    '"section":{"type":"string","description":"const (default) or resourcestring - the latter only at unit level and only for a string."},' +
+    '"place":{"type":"string","description":"local (default), class, interface or implementation."},' +
+    '"replace_all":{"type":"boolean","description":"Also replace the other occurrences of the literal - the routine for local, the unit otherwise. Ignored without a literal."},' +
+    ApplyProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
+    ',' +
     '{"name":"line_endings","description":"Every project source (and the files ' +
     'it includes) whose line breaks are not plain CRLF - LF only, CR only, or ' +
     'MIXED, which is the one Delphi handles worst (breakpoints land on the ' +

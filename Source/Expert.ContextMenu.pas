@@ -136,6 +136,7 @@ type
     procedure OnExtractMethod(Sender: TObject);
     procedure OnExtractVariable(Sender: TObject);
     procedure OnWrapTryFinally(Sender: TObject);
+    procedure OnDeclareConstant(Sender: TObject);
     procedure OnSafeDelete(Sender: TObject);
     procedure OnRemoveWithChoose(Sender: TObject);
     procedure OnExpandIncludesChoose(Sender: TObject);
@@ -480,6 +481,7 @@ begin
   Leaf(Root, 'Extract Method',            OnExtractMethod,        skExtract,    REQ_EDITOR);
   Leaf(Root, 'Extract variable...',       OnExtractVariable,      skExtractVariable, REQ_EDITOR);
   Leaf(Root, 'Wrap in try..finally',      OnWrapTryFinally,       skWrapTryFinally,  REQ_EDITOR);
+  Leaf(Root, 'Declare as constant...',   OnDeclareConstant,      skDeclareConstant, REQ_EDITOR);
   Leaf(Root, 'Align method signature...', OnSignatureCheck,       skAlign,      REQ_EDITOR);
   Leaf(Root, 'Change signature...',       OnChangeSignature,      skChangeSignature, REQ_EDITOR);
   Plain(Root, 'Edit methods...',           OnEditMethods,          REQ_EDITOR);
@@ -1585,6 +1587,11 @@ end;
 procedure TContextMenuInstaller.OnWrapTryFinally(Sender: TObject);
 begin
   WrapSelectionInTryFinally;
+end;
+
+procedure TContextMenuInstaller.OnDeclareConstant(Sender: TObject);
+begin
+  DeclareConstantAtSelection;
 end;
 
 procedure TContextMenuInstaller.OnSafeDelete(Sender: TObject);

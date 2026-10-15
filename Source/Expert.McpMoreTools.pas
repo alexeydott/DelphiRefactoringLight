@@ -2206,6 +2206,111 @@ begin
     ArgStr(AArgs, 'token'), Extra, AArgs, AStop);
 end;
 
+function ToolDeclareConstant(AArgs: TJSONObject; AStop: THandle): string;
+var
+  F, Literal, Name, TypeName, PlaceStr, SectionStr, Err, Msg, Why: string;
+  L1, Col1, EndCol1: Integer;
+  DoApply, Planned: Boolean;
+  Req: TDeclareRequest;
+  Plan: TDeclarePlan;
+  Content: string;
+begin
+  F := ArgStr(AArgs, 'file');
+  L1 := ArgInt(AArgs, 'line');
+  Literal := ArgStr(AArgs, 'literal');
+  Col1 := ArgInt(AArgs, 'column');
+  EndCol1 := ArgInt(AArgs, 'end_column');
+  Name := Trim(ArgStr(AArgs, 'name'));
+  TypeName := Trim(ArgStr(AArgs, 'type'));
+  PlaceStr := LowerCase(Trim(ArgStr(AArgs, 'place')));
+  SectionStr := LowerCase(Trim(ArgStr(AArgs, 'section')));
+  if (F = '') or (L1 < 1) then
+    Exit(McpErr('arguments "file" and "line" (1-based) are required'));
+  F := ExpandFileName(F);
+  DoApply := ArgBool(AArgs, 'apply');
+  Msg := '';
+  Planned := False;
+  Content := '';
+  Why := '';
+  if not McpRunOnMain(
+    procedure
+    begin
+      if not McpReadContent(F, Content) then
+      begin
+        Msg := 'file not found: ' + F;
+        Exit;
+      end;
+      var Lines := Content.Replace(#13#10, #10).Split([#10]);
+      if L1 > Length(Lines) then
+      begin
+        Msg := Format('line %d is beyond the file (%d lines)', [L1, Length(Lines)]);
+        Exit;
+      end;
+      var LineText := Lines[L1 - 1];
+      var Start0 := 0;
+      var End0 := 0;
+      if Literal <> '' then
+      begin
+        // Only a CODE occurrence counts - a match inside a comment or
+        // another token is not the literal the caller means (audit #39,
+        // L7d gave extract_variable the same rule).
+        var P := CodeOccurrenceOf(LineText, Literal, Col1);
+        if P = 0 then
+        begin
+          Msg := Format('the literal is not on line %d as code', [L1]);
+          Exit;
+        end;
+        Start0 := P - 1;
+        End0 := Start0 + Length(Literal);
+      end
+      else if (Col1 >= 1) and (EndCol1 > Col1) then
+      begin
+        Start0 := Col1 - 1;
+        End0 := EndCol1 - 1;
+        if End0 > Length(LineText) then
+        begin
+          Msg := 'end_column is beyond the line';
+          Exit;
+        end;
+      end;
+      // No literal and no columns = define it from scratch; the line is
+      // then only the anchor that says which routine or class is meant.
+      Req := DeclareRequestFor(Lines, L1 - 1, Start0, End0);
+      if Name <> '' then Req.Name := Name;
+      if ArgStr(AArgs, 'value') <> '' then Req.Value := Trim(ArgStr(AArgs, 'value'));
+      Req.TypeName := TypeName;
+      Req.ReplaceAll := ArgBool(AArgs, 'replace_all');
+      if SectionStr = 'resourcestring' then Req.Section := dsResourceString
+      else if (SectionStr <> '') and (SectionStr <> 'const') then
+      begin
+        Msg := 'section must be "const" or "resourcestring"';
+        Exit;
+      end;
+      if PlaceStr = 'class' then Req.Place := dplClass
+      else if PlaceStr = 'interface' then Req.Place := dplInterface
+      else if PlaceStr = 'implementation' then Req.Place := dplImplementation
+      else if (PlaceStr <> '') and (PlaceStr <> 'local') then
+      begin
+        Msg := 'place must be "local", "class", "interface" or "implementation"';
+        Exit;
+      end;
+      Planned := PlanDeclare(Lines, Req, Plan, Why);
+    end, True, AStop, Err) then Exit(McpErr(Err));
+  if Msg <> '' then Exit(McpErr(Msg));
+  if not Planned then Exit(McpErr('cannot declare that here: ' + Why));
+
+  var Extra := TJSONObject.Create;
+  Extra.AddPair('name', Req.Name);
+  Extra.AddPair('value', Req.Value);
+  Extra.AddPair('declaration', Trim(StringReplace(Plan.DeclText, sLineBreak,
+    ' ', [rfReplaceAll])));
+  Extra.AddPair('insertedAtLine', TJSONNumber.Create(Plan.InsertLine0 + 1));
+  Extra.AddPair('replaced', TJSONNumber.Create(Plan.Replaced));
+  if Plan.Note <> '' then Extra.AddPair('note', Plan.Note);
+  Result := LinesResult(F, Content, Plan.NewLines, 'declare_constant', DoApply,
+    ArgStr(AArgs, 'token'), Extra, AArgs, AStop);
+end;
+
 function ToolWrapTryFinally(AArgs: TJSONObject; AStop: THandle): string;
 var
   F, Cleanup, Err, Msg, Why, Content: string;
@@ -3482,6 +3587,7 @@ initialization
   RegisterMcpTool('cleanup_uses', ToolCleanupUses);
   RegisterMcpTool('move_to_unit', ToolMoveToUnit);
   RegisterMcpTool('extract_variable', ToolExtractVariable);
+  RegisterMcpTool('declare_constant', ToolDeclareConstant);
   RegisterMcpTool('wrap_try_finally', ToolWrapTryFinally);
   RegisterMcpTool('add_unit', ToolAddUnit);
   RegisterMcpTool('remove_unit', ToolRemoveUnit);

@@ -698,6 +698,10 @@ type
     ///  selection's - and without a selection the whole thing is defined
     ///  from scratch, where nothing in the code may change.</summary>
     [Test] procedure TheValueIsEditableAndMayComeFromNowhere;
+    /// <summary>...and the tool declares every argument its handler reads:
+    ///  one the schema does not list is dropped before the handler sees it,
+    ///  and the caller is told nothing (1.16.11).</summary>
+    [Test] procedure TheConstantToolDeclaresWhatItTakes;
   end;
 
   /// <summary>Forum report 2026-10-15: Delphi had been installed by an admin
@@ -5791,6 +5795,29 @@ begin
     dplImplementation, dsConst, False), Plan, Why), Why);
   Assert.IsTrue(string.Join(#10, Plan.NewLines).Contains('  CDelay: Cardinal = 250;'),
     Plan.DeclText);
+end;
+
+procedure TDeclareConstantTests.TheConstantToolDeclaresWhatItTakes;
+var
+  Args: TArray<string>;
+
+  function Declares(const AName: string): Boolean;
+  begin
+    Result := False;
+    for var A in Args do
+      if SameText(A, AName) then Exit(True);
+  end;
+
+begin
+  Args := KnownToolArguments('declare_constant');
+  Assert.IsTrue(Length(Args) > 0, 'the tool is in the shipped definitions');
+  // Exactly what ToolDeclareConstant reads.
+  for var Needed in ['file', 'line', 'literal', 'column',
+    'end_column', 'value', 'name', 'type', 'section', 'place',
+    'replace_all', 'apply', 'token'] do
+    Assert.IsTrue(Declares(Needed), Needed + ' is declared');
+  Assert.IsFalse(Declares('expression'),
+    'and nothing it does not read - that is extract_variable''s name for it');
 end;
 
 procedure TDeclareConstantTests.TheValueIsEditableAndMayComeFromNowhere;

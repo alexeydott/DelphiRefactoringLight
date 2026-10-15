@@ -150,8 +150,18 @@ function PlanDeclare(const ALines: TArray<string>;
 function DeclareRequestFor(const ALines: TArray<string>;
   ALine0, AStartCol0, AEndCol0: Integer): TDeclareRequest;
 
-/// <summary>Editor entry points (IDE and standalone).</summary>
+/// <summary>The dialog for it: name, value, type, section and place, with
+///  the plan checked live - so the preview line IS the validation. Exported
+///  so the layout can be rendered headless (scratchpad declrender), which
+///  is the only way to see a layout defect before a user clicks it.</summary>
+function AskDeclareConstant(const ALines: TArray<string>;
+  var AReq: TDeclareRequest): Boolean;
+
+/// <summary>Editor entry points (IDE and standalone). Declare works with
+///  AND without a selection - without one the dialog opens empty and the
+///  constant is defined from scratch.</summary>
 procedure ExtractVariableAtSelection;
+procedure DeclareConstantAtSelection;
 procedure WrapSelectionInTryFinally;
 
 implementation
@@ -160,7 +170,9 @@ uses
   System.Classes, System.StrUtils, System.Math, Vcl.Dialogs,
   Expert.EditorHelperIntf, Expert.UnitIndex, Expert.UsesEditor,
   Expert.AutoImport, Expert.WithScanner, Expert.DialogHelper, Expert.PascalScanner,
-  Expert.IdentifierCheck, Expert.MethodEdit, Expert.SelectionValidator;
+  Expert.IdentifierCheck, Expert.MethodEdit, Expert.SelectionValidator,
+  Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.Graphics,
+  System.UITypes, Expert.IdeThemes;
 
 // Assigns the reason and answers False, so every refusal below is one
 // line and none of them can forget to say why.
@@ -1035,6 +1047,306 @@ begin
     SplitEditorLines(APlan.DeclText.TrimRight([#13, #10])) +
     Copy(Lines, InsLine, Length(Lines) - InsLine);
   Result := True;
+end;
+
+type
+  // The dialog's live check. OnChange / OnClick need METHODS, so the state
+  // the closure would hold lives here - the same shape
+  // TTextInputValidator has in Expert.DialogHelper.
+  TDeclareDialogLogic = class(TComponent)
+  public
+    Lines: TArray<string>;
+    Base: TDeclareRequest;
+    EdtName, EdtValue: TEdit;
+    CbType: TComboBox;
+    RbLocal, RbClass, RbIntf, RbImpl: TRadioButton;
+    RbConst, RbRes: TRadioButton;
+    ChkAll: TCheckBox;
+    LblPreview: TLabel;
+    BtnOk: TButton;
+    function Current: TDeclareRequest;
+    procedure Changed(Sender: TObject);
+  end;
+
+function TDeclareDialogLogic.Current: TDeclareRequest;
+begin
+  Result := Base;
+  Result.Name := Trim(EdtName.Text);
+  Result.Value := Trim(EdtValue.Text);
+  if CbType.ItemIndex = 0 then Result.TypeName := '' else Result.TypeName := Trim(CbType.Text);
+  if RbClass.Checked then Result.Place := dplClass
+  else if RbIntf.Checked then Result.Place := dplInterface
+  else if RbImpl.Checked then Result.Place := dplImplementation
+  else Result.Place := dplLocal;
+  if RbRes.Checked then Result.Section := dsResourceString else Result.Section := dsConst;
+  Result.ReplaceAll := ChkAll.Checked and ChkAll.Enabled;
+end;
+
+procedure TDeclareDialogLogic.Changed(Sender: TObject);
+var
+  Plan: TDeclarePlan;
+  Why: string;
+begin
+  // Belt and braces for the defect above: a handler that runs before the
+  // form is complete does nothing instead of reading a nil control.
+  if (LblPreview = nil) or (BtnOk = nil) or (CbType = nil)
+    or (EdtName = nil) or (EdtValue = nil) or (ChkAll = nil)
+    or (RbConst = nil) or (RbRes = nil) or (RbLocal = nil)
+    or (RbClass = nil) or (RbIntf = nil) or (RbImpl = nil) then Exit;
+  // A resourcestring has no type of its own, so the combo is not just
+  // refused later - it is switched off while that section is picked.
+  CbType.Enabled := RbConst.Checked;
+  if RbRes.Checked then CbType.ItemIndex := 0;
+  if PlanDeclare(Lines, Current, Plan, Why) then
+  begin
+    LblPreview.Font.Color := clWindowText;
+    // The declaration as ONE line - its own indentation would read as a
+    // typo in a label.
+    LblPreview.Caption := Trim(StringReplace(Plan.DeclText, sLineBreak, ' ',
+      [rfReplaceAll]));
+    while Pos('  ', LblPreview.Caption) > 0 do   // TCaption takes no string helper
+      LblPreview.Caption := StringReplace(LblPreview.Caption, '  ', ' ', [rfReplaceAll]);
+    if Plan.Note <> '' then
+      LblPreview.Caption := LblPreview.Caption + '   (' + Plan.Note + ')';
+    BtnOk.Enabled := True;
+  end
+  else
+  begin
+    LblPreview.Font.Color := clRed;
+    LblPreview.Caption := Why;
+    BtnOk.Enabled := False;
+  end;
+end;
+
+function AskDeclareConstant(const ALines: TArray<string>;
+  var AReq: TDeclareRequest): Boolean;
+var
+  Dlg: TThemedToolForm;
+  Logic: TDeclareDialogLogic;
+  BtnCancel: TButton;
+  Y: Integer;
+
+  function Lbl(const AText: string; ATop: Integer): TLabel;
+  begin
+    Result := TLabel.Create(Dlg);
+    Result.Parent := Dlg;
+    Result.SetBounds(16, ATop + 4, 70, 18);
+    Result.Caption := AText;
+  end;
+
+  function Radio(AParent: TWinControl; const AText: string;
+    ALeft, ATop: Integer; AFirst: Boolean): TRadioButton;
+  begin
+    Result := TRadioButton.Create(Dlg);
+    Result.Parent := AParent;
+    Result.SetBounds(ALeft, ATop, 180, 20);
+    Result.Caption := AText;
+    Result.TabStop := AFirst;
+    // NO handler here: the caller sets Checked right after, and that FIRES
+    // OnClick while the controls below are still nil. Everything is wired
+    // in one place once the form is complete.
+  end;
+
+begin
+  Dlg := TThemedToolForm.CreateNew(nil);
+  try
+    Dlg.BorderStyle := bsDialog;
+    Dlg.Caption := 'Declare as constant';
+    Dlg.Position := poScreenCenter;
+    Dlg.ClientWidth := 440;
+
+    Logic := TDeclareDialogLogic.Create(Dlg);
+    Logic.Lines := ALines;
+    Logic.Base := AReq;
+
+    Y := 12;
+    Lbl('&Name:', Y);
+    Logic.EdtName := TEdit.Create(Dlg);
+    Logic.EdtName.Parent := Dlg;
+    Logic.EdtName.SetBounds(92, Y, 332, 24);
+    Logic.EdtName.Text := AReq.Name;
+
+
+    Inc(Y, 30);
+    Lbl('&Value:', Y);
+    Logic.EdtValue := TEdit.Create(Dlg);
+    Logic.EdtValue.Parent := Dlg;
+    Logic.EdtValue.SetBounds(92, Y, 332, 24);
+    Logic.EdtValue.Text := AReq.Value;
+
+
+    Inc(Y, 30);
+    Lbl('&Type:', Y);
+    Logic.CbType := TComboBox.Create(Dlg);
+    Logic.CbType.Parent := Dlg;
+    Logic.CbType.SetBounds(92, Y, 160, 24);
+    Logic.CbType.Style := csDropDown;   // a type we do not list can be typed
+    Logic.CbType.Items.AddStrings(['(untyped)', 'Integer', 'Cardinal', 'Int64',
+      'Double', 'string', 'Boolean', 'Char']);
+    Logic.CbType.ItemIndex := 0;
+
+    Inc(Y, 34);
+    Lbl('&Section:', Y);
+    var PnlSect := TPanel.Create(Dlg);
+    PnlSect.Parent := Dlg;
+    PnlSect.BevelOuter := bvNone;
+    PnlSect.ParentBackground := False;
+    PnlSect.ParentColor := True;
+    PnlSect.SetBounds(90, Y, 334, 22);
+    Logic.RbConst := Radio(PnlSect, 'const', 2, 1, True);
+    Logic.RbConst.Width := 90;
+    Logic.RbRes := Radio(PnlSect, 'resourcestring', 96, 1, False);
+
+    Inc(Y, 28);
+    Lbl('&Place:', Y);
+    var PnlPlace := TPanel.Create(Dlg);
+    PnlPlace.Parent := Dlg;
+    PnlPlace.BevelOuter := bvNone;
+    PnlPlace.ParentBackground := False;
+    PnlPlace.ParentColor := True;
+    PnlPlace.SetBounds(90, Y, 334, 44);
+    Logic.RbLocal := Radio(PnlPlace, 'in this routine', 2, 1, True);
+    Logic.RbIntf := Radio(PnlPlace, 'unit interface', 172, 1, False);
+    Logic.RbClass := Radio(PnlPlace, 'in this class', 2, 23, False);
+    Logic.RbImpl := Radio(PnlPlace, 'unit implementation', 172, 23, False);
+    Inc(Y, 22);
+    // The section is set AFTER both groups exist: a radio button unchecks
+    // only its own parent's siblings now, but the order still costs nothing.
+    Logic.RbConst.Checked := AReq.Section = dsConst;
+    Logic.RbRes.Checked := AReq.Section = dsResourceString;
+    case AReq.Place of
+      dplClass: Logic.RbClass.Checked := True;
+      dplInterface: Logic.RbIntf.Checked := True;
+      dplImplementation: Logic.RbImpl.Checked := True;
+    else
+      Logic.RbLocal.Checked := True;
+    end;
+
+    Inc(Y, 28);
+    Logic.ChkAll := TCheckBox.Create(Dlg);
+    Logic.ChkAll.Parent := Dlg;
+    Logic.ChkAll.SetBounds(92, Y, 332, 20);
+    // Without a selection there is no literal to look for, so the box says
+    // so instead of offering something that would be ignored.
+    if AReq.HasSelection then
+      Logic.ChkAll.Caption := 'Replace every other occurrence of ' +
+        Copy(ALines[AReq.Line0], AReq.StartCol0 + 1, AReq.EndCol0 - AReq.StartCol0)
+    else
+    begin
+      Logic.ChkAll.Caption := 'Replace other occurrences (nothing selected)';
+      Logic.ChkAll.Enabled := False;
+    end;
+
+    Inc(Y, 26);
+    Logic.LblPreview := TLabel.Create(Dlg);
+    Logic.LblPreview.Parent := Dlg;
+    Logic.LblPreview.AutoSize := False;
+    Logic.LblPreview.WordWrap := True;
+    Logic.LblPreview.SetBounds(16, Y, 408, 36);
+
+    Inc(Y, 44);
+    Logic.BtnOk := TButton.Create(Dlg);
+    Logic.BtnOk.Parent := Dlg;
+    Logic.BtnOk.Caption := 'OK';
+    Logic.BtnOk.Default := True;
+    Logic.BtnOk.ModalResult := mrOk;
+    Logic.BtnOk.SetBounds(238, Y, 90, 26);
+
+    BtnCancel := TButton.Create(Dlg);
+    BtnCancel.Parent := Dlg;
+    BtnCancel.Caption := 'Cancel';
+    BtnCancel.Cancel := True;
+    BtnCancel.ModalResult := mrCancel;
+    BtnCancel.SetBounds(334, Y, 90, 26);
+
+    Dlg.ClientHeight := Y + 40;
+
+    // Now that every control exists, wire them - and only now may a change
+    // reach Changed.
+    Logic.EdtName.OnChange := Logic.Changed;
+    Logic.EdtValue.OnChange := Logic.Changed;
+    Logic.CbType.OnChange := Logic.Changed;
+    Logic.CbType.OnClick := Logic.Changed;
+    Logic.ChkAll.OnClick := Logic.Changed;
+    for var Rb in [Logic.RbConst, Logic.RbRes, Logic.RbLocal, Logic.RbClass,
+      Logic.RbIntf, Logic.RbImpl] do
+      Rb.OnClick := Logic.Changed;
+
+    Logic.Changed(nil);
+    EnableThemes(Dlg);
+    PrepareDialog(Dlg, nil);
+    Dlg.ActiveControl := Logic.EdtName;
+    Logic.EdtName.SelectAll;
+    Result := Dlg.ShowModal = mrOk;
+    if Result then AReq := Logic.Current;
+  finally
+    Dlg.Free;
+  end;
+end;
+
+procedure DeclareConstantAtSelection;
+var
+  F, SelText, Content, Why: string;
+  SL, SC, EL, EC, Line, Col: Integer;
+  Lines: TArray<string>;
+  Req: TDeclareRequest;
+  Plan: TDeclarePlan;
+begin
+  if Editor = nil then Exit;
+  // The selection FIRST: GetCurrentContext walks the caret and collapses it
+  // (1.18.6), and here it is not needed at all - the caret comes from the
+  // cheap getters.
+  SelText := '';
+  if not Editor.GetSelection(F, SL, SC, EL, EC, SelText)
+    or (Trim(SelText) = '') or (EL <> SL) or SelText.Contains(#10) then
+  begin
+    SelText := '';
+    F := Editor.GetActiveFileName;
+    if not Editor.GetCaretLineCol(Line, Col) then
+    begin
+      Line := 1;
+      Col := 1;
+    end;
+    SL := Line;
+    SC := Col;
+    EC := SC;   // nothing selected: define it from scratch
+  end;
+  if F = '' then
+  begin
+    ShowThemedMessage('Declare as constant: no file in the editor.');
+    Exit;
+  end;
+  if not ReadLinesOf(F, Content, Lines) or (SL < 1) or (SL > Length(Lines)) then
+  begin
+    ShowThemedMessage('Declare as constant: the file is not open in the editor.');
+    Exit;
+  end;
+
+  var Col0 := SC - 1;
+  if SelText <> '' then
+  begin
+    // The columns are editor columns; trust the selected TEXT and locate it.
+    var LineText := Lines[SL - 1];
+    if Copy(LineText, Col0 + 1, Length(SelText)) <> SelText then
+    begin
+      var P := Pos(SelText, LineText, Max(1, Col0 - 1));
+      if P = 0 then P := Pos(SelText, LineText);
+      if P > 0 then Col0 := P - 1 else SelText := '';
+    end;
+  end;
+  if SelText <> '' then
+    Req := DeclareRequestFor(Lines, SL - 1, Col0, Col0 + Length(SelText))
+  else
+    Req := DeclareRequestFor(Lines, SL - 1, 0, 0);
+
+  if not AskDeclareConstant(Lines, Req) then Exit;
+  if not PlanDeclare(Lines, Req, Plan, Why) then
+  begin
+    ShowThemedMessage('Declare as constant: ' + Why + '.');
+    Exit;
+  end;
+  if not WriteLines(F, Content, Plan.NewLines) then
+    ShowThemedMessage('Declare as constant: writing the change failed.');
 end;
 
 procedure ExtractVariableAtSelection;

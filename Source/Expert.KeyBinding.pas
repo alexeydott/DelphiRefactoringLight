@@ -29,6 +29,7 @@ type
     procedure SafeDeleteKeyProc(const Context: IOTAKeyContext; KeyCode: TShortCut; var BindingResult: TKeyBindingResult);
     procedure ExtractVariableKeyProc(const Context: IOTAKeyContext; KeyCode: TShortCut; var BindingResult: TKeyBindingResult);
     procedure WrapTryFinallyKeyProc(const Context: IOTAKeyContext; KeyCode: TShortCut; var BindingResult: TKeyBindingResult);
+    procedure DeclareConstantKeyProc(const Context: IOTAKeyContext; KeyCode: TShortCut; var BindingResult: TKeyBindingResult);
     procedure ConvertPropertiesKeyProc(const Context: IOTAKeyContext; KeyCode: TShortCut; var BindingResult: TKeyBindingResult);
   public
     function GetBindingType: TBindingType;
@@ -177,6 +178,14 @@ begin
   ExtractVariableAtSelection;
 end;
 
+procedure TLspKeyBinding.DeclareConstantKeyProc(const Context: IOTAKeyContext;
+  KeyCode: TShortCut; var BindingResult: TKeyBindingResult);
+begin
+  BindingResult := krHandled;
+  if not TExpertsShortCut.AllowAction(skDeclareConstant) then Exit;
+  DeclareConstantAtSelection;
+end;
+
 procedure TLspKeyBinding.WrapTryFinallyKeyProc(const Context: IOTAKeyContext;
   KeyCode: TShortCut; var BindingResult: TKeyBindingResult);
 begin
@@ -224,6 +233,7 @@ begin
   Bind(skExtractVariable, ExtractVariableKeyProc);
   Bind(skWrapTryFinally, WrapTryFinallyKeyProc);
   Bind(skConvertProperties, ConvertPropertiesKeyProc);
+  Bind(skDeclareConstant, DeclareConstantKeyProc);
 
   // NOTE: do NOT bind plain editing keys (arrows, Enter, Tab, Escape)
   // here for the completion popup. Empirically, registering them eats
