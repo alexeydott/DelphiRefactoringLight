@@ -131,6 +131,35 @@ function LineEndingCheckCandidate(const AFileName: string): Boolean;
 function LooksBinaryContent(const ABytes: TBytes): Boolean;
 
 type
+  /// <summary>What the user answered to the line-ending warning. CANCEL is
+  ///  its own answer and NOT the same as "Leave it": it decides nothing, so
+  ///  the next open asks again (user, 2026-10-15 - "wenn man das nicht
+  ///  will, kann man das ja auswaehlen").</summary>
+  TLineEndingChoice = (
+    lecCorrectOnce,     // correct these files, ask again next time
+    lecCorrectSession,  // ... and stop asking until the IDE closes
+    lecCorrectAlways,   // ... and save that in the options
+    lecLeave,           // change nothing, and do not report these again
+    lecCancel);         // change nothing, and decide nothing
+
+  TLineEndingEffect = record
+    Correct: Boolean;            // rewrite the files now
+    AlwaysThisSession: Boolean;  // no more questions in this IDE session
+    AlwaysSaved: Boolean;        // ... and in the next one
+    DoNotAskAgain: Boolean;      // remember THESE files for this session
+  end;
+
+/// <summary>Everything one answer means, in one place: what the dialog
+///  does, what it stores, and whether the files are remembered.</summary>
+function LineEndingChoiceEffect(AChoice: TLineEndingChoice): TLineEndingEffect;
+
+/// <summary>The dialog's result as an answer. AConfirmed = False (Cancel,
+///  Escape, the close box) is lecCancel whatever the radio buttons say, and
+///  so is an index the dialog cannot have produced.</summary>
+function LineEndingChoiceOfIndex(AIndex: Integer;
+  AConfirmed: Boolean): TLineEndingChoice;
+
+type
   TSourceDirective = record
     Line: Integer;       // 1-based
     Text: string;        // e.g. '{$D-}'
@@ -411,6 +440,47 @@ begin
   for I := 0 to Limit - 1 do
     if ABytes[I] = 0 then Exit(True);
   Result := False;
+end;
+
+function LineEndingChoiceEffect(AChoice: TLineEndingChoice): TLineEndingEffect;
+begin
+  Result := Default(TLineEndingEffect);
+  case AChoice of
+    lecCorrectOnce:
+      Result.Correct := True;
+    lecCorrectSession:
+      begin
+        Result.Correct := True;
+        Result.AlwaysThisSession := True;
+      end;
+    lecCorrectAlways:
+      begin
+        Result.Correct := True;
+        Result.AlwaysThisSession := True;
+        Result.AlwaysSaved := True;
+      end;
+    lecLeave:
+      // The only answer that silences these files: the user said so.
+      Result.DoNotAskAgain := True;
+    lecCancel:
+      // Nothing. Not even "do not ask again" - that is what Leave it is
+      // for, and a cancelled dialog must cost the user nothing.
+      ;
+  end;
+end;
+
+function LineEndingChoiceOfIndex(AIndex: Integer;
+  AConfirmed: Boolean): TLineEndingChoice;
+begin
+  if not AConfirmed then Exit(lecCancel);
+  case AIndex of
+    0: Result := lecCorrectOnce;
+    1: Result := lecCorrectSession;
+    2: Result := lecCorrectAlways;
+    3: Result := lecLeave;
+  else
+    Result := lecCancel;   // an answer we did not offer changes nothing
+  end;
 end;
 
 // ---------------------------------------------------------------------------

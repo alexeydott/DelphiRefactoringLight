@@ -29,8 +29,11 @@ unit Expert.LineEndingWatcher;
 //    a shipped RTL/VCL source: LineEndingCheckCandidate (extension),
 //    LooksBinaryContent (content) and the BDS root are three separate
 //    gates.
-//  * A file is reported ONCE per session, whatever the answer - a warning
-//    the user has already answered is noise.
+//  * A file is reported once per session once the user has ANSWERED - but
+//    Cancel is not an answer. It changes nothing and decides nothing, so
+//    the next open asks again; "Leave it" is the answer that silences the
+//    file (user, 2026-10-15). What each answer means lives in ONE pure
+//    place, Expert.DebugConsistency.LineEndingChoiceEffect.
 //  * The conversion is a DISK write plus Module.Refresh, which is only
 //    honest while the buffer is unmodified. A modified buffer is named
 //    instead of being overwritten.
@@ -271,11 +274,14 @@ begin
       sLineBreak + Problems);
 end;
 
-procedure AskAndFix(const AFiles: TArray<TPendingFile>);
+/// <summary>Asks, acts, and answers whether these files are now settled
+///  (so they are not reported again in this session).</summary>
+function AskAndFix(const AFiles: TArray<TPendingFile>): Boolean;
 var
   Options: TArray<TThemedChoice>;
   Index: Integer;
   Prompt: string;
+  Effect: TLineEndingEffect;
 
   function Choice(const ACaption, AHint: string): TThemedChoice;
   begin
@@ -308,23 +314,21 @@ begin
       'Turns on "fix line endings without asking" in the options.'),
     Choice('Leave it',
       IfThen(Length(AFiles) = 1,
-        'Nothing is changed. This file is not reported again in this session.',
-        'Nothing is changed. These files are not reported again in this ' +
-        'session.'))];
+        'Nothing is changed, and this file is not reported again in this ' +
+        'session. (Cancel asks again next time.)',
+        'Nothing is changed, and these files are not reported again in this ' +
+        'session. (Cancel asks again next time.)'))];
   Index := 0;
-  if not ChooseThemedOption('Line endings', Prompt, Options, Index) then
-    Exit;   // cancelled = leave it
-  case Index of
-    1: GSessionAlways := True;
-    2:
-      begin
-        GSessionAlways := True;
-        TPluginSettings.LineEndingAutoFix := True;
-        TPluginSettings.Save;
-      end;
-    3: Exit;
+  Effect := LineEndingChoiceEffect(LineEndingChoiceOfIndex(Index,
+    ChooseThemedOption('Line endings', Prompt, Options, Index)));
+  if Effect.AlwaysThisSession then GSessionAlways := True;
+  if Effect.AlwaysSaved then
+  begin
+    TPluginSettings.LineEndingAutoFix := True;
+    TPluginSettings.Save;
   end;
-  ApplyFix(AFiles);
+  if Effect.Correct then ApplyFix(AFiles);
+  Result := Effect.DoNotAskAgain;
 end;
 
 procedure TTickHandler.DoTick(Sender: TObject);
@@ -356,8 +360,6 @@ begin
     if GReported.ContainsKey(Fn.ToLower) then Continue;
     Inc(GChecked);
     if not Examine(Fn, Info) then Continue;
-    // Reported ONCE per session, whatever the answer below is.
-    GReported.AddOrSetValue(Fn.ToLower, True);
     Entry.FileName := Fn;
     Entry.Info := Info;
     Files := Files + [Entry];
@@ -368,9 +370,13 @@ begin
   GBusy := True;
   try
     if GSessionAlways or TPluginSettings.LineEndingAutoFix then
+      // Nothing to remember: a corrected file is CRLF and will not come
+      // back, and one that could NOT be corrected deserves the question
+      // again when it is reopened - which is what its message asks for.
       ApplyFix(Files)
-    else
-      AskAndFix(Files);
+    else if AskAndFix(Files) then
+      for Entry in Files do
+        GReported.AddOrSetValue(Entry.FileName.ToLower, True);
   finally
     GBusy := False;
   end;

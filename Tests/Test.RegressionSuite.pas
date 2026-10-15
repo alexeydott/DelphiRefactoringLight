@@ -643,6 +643,13 @@ type
     ///  CRLF, the encoding and the content survive, and a second run is a
     ///  no-op.</summary>
     [Test] procedure TheFixProducesCrlfAndChangesNothingElse;
+    /// <summary>"Abbrechen scheint das gleiche wie Leave it zu machen. Es
+    ///  sollte aber nur nix tun, aber beim naechsten Mal nachfragen, denn
+    ///  wenn man das nicht will, kann man das ja auswaehlen" (user,
+    ///  2026-10-15). Cancel decides NOTHING - the file was remembered
+    ///  before the dialog even opened, so a cancelled question silenced it
+    ///  for the whole session.</summary>
+    [Test] procedure CancelDecidesNothingAndLeaveItDoes;
   end;
 
   [TestFixture]
@@ -5217,6 +5224,50 @@ begin
   Assert.AreEqual(Length(After), Length(Again), 'same length');
   Assert.IsTrue((Length(Again) = 0) or
     CompareMem(@After[0], @Again[0], Length(After)), 'and writes nothing');
+end;
+
+procedure TLineEndingCheckTests.CancelDecidesNothingAndLeaveItDoes;
+var
+  E: TLineEndingEffect;
+begin
+  // THE REPORTED CASE: Cancel changes nothing AND settles nothing.
+  E := LineEndingChoiceEffect(lecCancel);
+  Assert.IsFalse(E.Correct, 'cancel corrects nothing');
+  Assert.IsFalse(E.AlwaysThisSession, 'cancel stores nothing');
+  Assert.IsFalse(E.AlwaysSaved, 'cancel saves nothing');
+  Assert.IsFalse(E.DoNotAskAgain,
+    'cancel must ask again next time - that is the whole difference to Leave it');
+
+  // ... and "Leave it" is the answer that does silence the file.
+  E := LineEndingChoiceEffect(lecLeave);
+  Assert.IsFalse(E.Correct, 'leave it corrects nothing');
+  Assert.IsTrue(E.DoNotAskAgain, 'leave it is a decision');
+  Assert.IsFalse(E.AlwaysThisSession, 'and says nothing about other files');
+
+  // The three correcting answers, and only the last one is persisted.
+  E := LineEndingChoiceEffect(lecCorrectOnce);
+  Assert.IsTrue(E.Correct, 'correct once corrects');
+  Assert.IsFalse(E.AlwaysThisSession, 'and asks again for the next file');
+  E := LineEndingChoiceEffect(lecCorrectSession);
+  Assert.IsTrue(E.Correct and E.AlwaysThisSession, 'correct + this session');
+  Assert.IsFalse(E.AlwaysSaved, 'but not beyond it');
+  E := LineEndingChoiceEffect(lecCorrectAlways);
+  Assert.IsTrue(E.Correct and E.AlwaysThisSession and E.AlwaysSaved,
+    'correct + always, saved');
+
+  // The dialog's result mapped to an answer: not confirmed is cancel
+  // whatever the radio buttons say (Escape and the close box land here
+  // too), and an index we never offered is no answer either.
+  Assert.IsTrue(LineEndingChoiceOfIndex(0, False) = lecCancel,
+    'not confirmed on option 1 is still cancel');
+  Assert.IsTrue(LineEndingChoiceOfIndex(3, False) = lecCancel,
+    'not confirmed on "leave it" is still cancel');
+  Assert.IsTrue(LineEndingChoiceOfIndex(0, True) = lecCorrectOnce, 'option 1');
+  Assert.IsTrue(LineEndingChoiceOfIndex(1, True) = lecCorrectSession, 'option 2');
+  Assert.IsTrue(LineEndingChoiceOfIndex(2, True) = lecCorrectAlways, 'option 3');
+  Assert.IsTrue(LineEndingChoiceOfIndex(3, True) = lecLeave, 'option 4');
+  Assert.IsTrue(LineEndingChoiceOfIndex(9, True) = lecCancel,
+    'an answer we did not offer changes nothing');
 end;
 
 { TCheckScopeTests }
