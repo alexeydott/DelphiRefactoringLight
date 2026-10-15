@@ -563,13 +563,40 @@ begin
   end;
 end;
 
+/// <summary>The height AText needs at AWidth pixels, in AFont. The same
+///  DT_CALCRECT measurement AskThemedConfirm uses - a hard-coded height is
+///  how text gets cut off (user screenshot, 2026-10-15: the prompt's second
+///  paragraph was drawn behind the first radio button, and the first hint
+///  ended in "The encoding stays as it").</summary>
+function TextHeightFor(AFont: TFont; const AText: string;
+  AWidth: Integer): Integer;
+var
+  Measure: Vcl.Graphics.TBitmap;
+  R: TRect;
+begin
+  if AText = '' then Exit(0);
+  Measure := Vcl.Graphics.TBitmap.Create;
+  try
+    Measure.Canvas.Font := AFont;
+    R := Rect(0, 0, AWidth, 0);
+    DrawText(Measure.Canvas.Handle, PChar(AText), Length(AText), R,
+      DT_CALCRECT or DT_WORDBREAK or DT_NOPREFIX);
+    Result := R.Bottom;
+  finally
+    Measure.Free;
+  end;
+  if Result < 16 then Result := 16;
+end;
+
 function ChooseThemedOption(const ACaption, APrompt: string;
   const AOptions: TArray<TThemedChoice>; var AIndex: Integer): Boolean;
 const
-  W = 460;
+  NarrowW = 460;
+  WideW = 640;      // a long prompt is better wide than endlessly tall
 var
   Dlg: TThemedToolForm;
   Radios: TArray<TRadioButton>;
+  W: Integer;
 begin
   Result := False;
   var First := -1;
@@ -583,6 +610,13 @@ begin
     Dlg.BorderStyle := bsDialog;
     Dlg.Caption := ACaption;
     Dlg.Position := poScreenCenter;
+    W := NarrowW;
+    // EVERY height below is measured, never assumed. The prompt may be one
+    // line (the scope choosers) or several paragraphs with a file list (the
+    // line-ending warning), and a hint may wrap - so the row pitch follows
+    // the text instead of the text following the pitch.
+    if TextHeightFor(Dlg.Font, APrompt, NarrowW - 32) > 8 * 16 then
+      W := WideW;
     Dlg.ClientWidth := W;
     var Confirm := TChoiceConfirm.Create(Dlg);
     Confirm.Form := Dlg;
@@ -594,9 +628,11 @@ begin
       Lbl.Parent := Dlg;
       Lbl.AutoSize := False;
       Lbl.WordWrap := True;
-      Lbl.SetBounds(16, Y, W - 32, 34);
+      Lbl.ShowAccelChar := False;
+      Lbl.SetBounds(16, Y, W - 32,
+        TextHeightFor(Dlg.Font, APrompt, W - 32));
       Lbl.Caption := APrompt;
-      Inc(Y, 40);
+      Inc(Y, Lbl.Height + 12);
     end;
     SetLength(Radios, Length(AOptions));
     for var I := 0 to High(AOptions) do
@@ -612,12 +648,15 @@ begin
       var H := TLabel.Create(Dlg);
       H.Parent := Dlg;
       H.AutoSize := False;
-      H.SetBounds(36, Y + 20, W - 52, 16);
-      if AOptions[I].Enabled then H.Caption := AOptions[I].Hint
-      else H.Caption := AOptions[I].DisabledWhy;
+      H.WordWrap := True;
+      var HintText := AOptions[I].Hint;
+      if not AOptions[I].Enabled then HintText := AOptions[I].DisabledWhy;
+      H.SetBounds(36, Y + 20, W - 52,
+        TextHeightFor(Dlg.Font, HintText, W - 52));
+      H.Caption := HintText;
       H.Font.Color := GetThemedColor(clGrayText);
       H.ShowAccelChar := False;
-      Inc(Y, 44);
+      Inc(Y, 20 + H.Height + 8);
     end;
 
     var BtnOk := TButton.Create(Dlg);

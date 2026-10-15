@@ -55,7 +55,7 @@ implementation
 
 uses
   System.SysUtils, System.Classes, System.IOUtils, System.Generics.Collections,
-  Vcl.ExtCtrls, Vcl.Forms, ToolsAPI,
+  System.StrUtils, Vcl.ExtCtrls, Vcl.Forms, ToolsAPI,
   Expert.DebugConsistency, Expert.DialogHelper, Expert.EditorHelperIntf,
   Expert.PluginSettings, Expert.UnitIndex;
 
@@ -307,7 +307,10 @@ begin
     Choice('Correct now, and always (saved)',
       'Turns on "fix line endings without asking" in the options.'),
     Choice('Leave it',
-      'Nothing is changed. This file is not reported again in this session.')];
+      IfThen(Length(AFiles) = 1,
+        'Nothing is changed. This file is not reported again in this session.',
+        'Nothing is changed. These files are not reported again in this ' +
+        'session.'))];
   Index := 0;
   if not ChooseThemedOption('Line endings', Prompt, Options, Index) then
     Exit;   // cancelled = leave it
