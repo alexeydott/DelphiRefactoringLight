@@ -105,18 +105,50 @@ function ClassifyDeclareValue(const ASelection: string): TDeclareValueKind;
 function SuggestConstantName(const ASelection, AContextBefore: string;
   AKind: TDeclareValueKind): string;
 
-/// <summary>Declares the single-line selection [AStartCol0, AEndCol0) on
-///  ALine0 as a constant and puts AName in its place. AType is the Pascal
-///  type ('' = untyped, which is what a const usually wants).
-///  AReplaceAll also replaces every other occurrence of the SAME literal -
-///  in the enclosing routine for dplLocal, in the whole unit otherwise;
-///  only in code, and only whole literals, so 100 never matches inside
-///  1000. False with AWhy for everything that would not compile or would
-///  change the meaning.</summary>
-function PlanDeclareFromSelection(const ALines: TArray<string>;
-  ALine0, AStartCol0, AEndCol0: Integer; const AName, AType: string;
-  APlace: TDeclarePlace; ASection: TDeclareSection; AReplaceAll: Boolean;
-  out APlan: TDeclarePlan; out AWhy: string): Boolean;
+type
+  /// <summary>What to declare, and where. The VALUE is its own field and
+  ///  not the selected text: the selection only offers it, and the user may
+  ///  change it (request 2026-10-16) - or select nothing at all and define
+  ///  the constant from scratch, which is what HasSelection = False
+  ///  means.</summary>
+  TDeclareRequest = record
+    /// <summary>0-based caret line. Without a selection this is still what
+    ///  says which routine or class dplLocal / dplClass mean.</summary>
+    Line0: Integer;
+    /// <summary>The selection on Line0, end exclusive. Ignored, and
+    ///  nothing is replaced, when HasSelection is False.</summary>
+    HasSelection: Boolean;
+    StartCol0: Integer;
+    EndCol0: Integer;
+    Name: string;
+    /// <summary>What is declared. A literal or a constant expression of
+    ///  literals - see TDeclareValueKind.</summary>
+    Value: string;
+    /// <summary>'' = untyped, which is what a const usually wants.</summary>
+    TypeName: string;
+    Place: TDeclarePlace;
+    Section: TDeclareSection;
+    /// <summary>Also replace every OTHER occurrence of the selected literal
+    ///  - in the enclosing routine for dplLocal, in the whole unit
+    ///  otherwise. Only in code and only whole literals, so 100 never
+    ///  matches inside 1000. Without a selection there is nothing to
+    ///  replace and this is ignored.</summary>
+    ReplaceAll: Boolean;
+  end;
+
+/// <summary>Declares AReq.Value as a constant, and where AReq has a
+///  selection puts the name in its place. False with AWhy for everything
+///  that would not compile or would change the meaning - and every refusal
+///  says which.</summary>
+function PlanDeclare(const ALines: TArray<string>;
+  const AReq: TDeclareRequest; out APlan: TDeclarePlan;
+  out AWhy: string): Boolean;
+
+/// <summary>A request for the selection [AStartCol0, AEndCol0) on ALine0,
+///  with the value and the name offered from it - what the editor hands the
+///  dialog. AStartCol0 &gt;= AEndCol0 means "nothing selected".</summary>
+function DeclareRequestFor(const ALines: TArray<string>;
+  ALine0, AStartCol0, AEndCol0: Integer): TDeclareRequest;
 
 /// <summary>Editor entry points (IDE and standalone).</summary>
 procedure ExtractVariableAtSelection;
@@ -790,12 +822,37 @@ begin
   end;
 end;
 
-function PlanDeclareFromSelection(const ALines: TArray<string>;
-  ALine0, AStartCol0, AEndCol0: Integer; const AName, AType: string;
-  APlace: TDeclarePlace; ASection: TDeclareSection; AReplaceAll: Boolean;
-  out APlan: TDeclarePlan; out AWhy: string): Boolean;
+function DeclareRequestFor(const ALines: TArray<string>;
+  ALine0, AStartCol0, AEndCol0: Integer): TDeclareRequest;
 var
-  Content, Value, Decl, Keyword, Problem: string;
+  Sel: string;
+begin
+  Result := Default(TDeclareRequest);
+  Result.Line0 := ALine0;
+  Result.Place := dplLocal;
+  Result.Section := dsConst;
+  Result.HasSelection := (ALine0 >= 0) and (ALine0 <= High(ALines))
+    and (AEndCol0 > AStartCol0) and (AStartCol0 >= 0);
+  if not Result.HasSelection then
+  begin
+    // From scratch: the user names the value too. A place that needs no
+    // enclosing routine is the safer default then.
+    Result.Name := 'CValue';
+    Exit;
+  end;
+  Result.StartCol0 := AStartCol0;
+  Result.EndCol0 := AEndCol0;
+  Sel := Copy(ALines[ALine0], AStartCol0 + 1, AEndCol0 - AStartCol0);
+  Result.Value := Sel;
+  Result.Name := SuggestConstantName(Sel, Copy(ALines[ALine0], 1, AStartCol0),
+    ClassifyDeclareValue(Sel));
+end;
+
+function PlanDeclare(const ALines: TArray<string>;
+  const AReq: TDeclareRequest; out APlan: TDeclarePlan;
+  out AWhy: string): Boolean;
+var
+  Content, Value, Sel, Decl, Keyword, Problem: string;
   Kind: TDeclareValueKind;
   Tok: TPasToken;
   PrevKind: TPasTokenKind;
@@ -803,7 +860,20 @@ var
   Lines: TArray<string>;
   Hits: TArray<TPasToken>;
   First, Last, InsLine, I: Integer;
+  ALine0, AStartCol0, AEndCol0: Integer;
+  AName, AType: string;
+  APlace: TDeclarePlace;
+  ASection: TDeclareSection;
+  AReplaceAll: Boolean;
 begin
+  ALine0 := AReq.Line0;
+  AStartCol0 := AReq.StartCol0;
+  AEndCol0 := AReq.EndCol0;
+  AName := AReq.Name;
+  AType := AReq.TypeName;
+  APlace := AReq.Place;
+  ASection := AReq.Section;
+  AReplaceAll := AReq.ReplaceAll and AReq.HasSelection;
   // No "Result := False" here: every refusal below goes through SetWhy,
   // which answers False - so a path that forgets the reason cannot compile
   // as a silent failure either.
@@ -811,28 +881,39 @@ begin
   APlan.InsertLine0 := -1;
   AWhy := '';
   if (ALine0 < 0) or (ALine0 > High(ALines)) then Exit(SetWhy(AWhy, 'the line is not in this file'));
-  if (AStartCol0 < 0) or (AEndCol0 <= AStartCol0) then Exit(SetWhy(AWhy, 'nothing is selected'));
 
   Content := string.Join(#10, ALines);
-  Value := Copy(ALines[ALine0], AStartCol0 + 1, AEndCol0 - AStartCol0);
-  if Trim(Value) = '' then Exit(SetWhy(AWhy, 'nothing is selected'));
+  Value := Trim(AReq.Value);
+  if Value = '' then Exit(SetWhy(AWhy, 'enter a value'));
 
-  // --- the selection must be ONE literal of code ---------------------------
-  Tok := TokenOfSelection(Content, ALine0, AStartCol0, AEndCol0, PrevKind, PrevText);
-  if Tok.Kind = ptEnd then
-  begin
-    // A selected unary minus together with its number is two tokens, and
-    // whether the minus belongs to the value depends on what stands before
-    // it - that is a question the user should answer, not us.
-    if (Length(Value) > 1) and (Value[1] = '-') then
-      Exit(SetWhy(AWhy, 'the minus may belong to the expression - select the number itself'));
-    Exit(SetWhy(AWhy, 'select exactly one number or string literal (and not inside a comment)'));
-  end;
-  if not (Tok.Kind in [ptNumber, ptString]) then
-    Exit(SetWhy(AWhy, 'only a number or a string literal can become a constant'));
+  // --- the VALUE is what gets declared, so it is what must be a literal ----
   Kind := ClassifyDeclareValue(Value);
   if not (Kind in [dvNumber, dvString]) then
-    Exit(SetWhy(AWhy, 'the selection is not a single literal value'));
+    Exit(SetWhy(AWhy, 'the value must be a literal - a number, a string, or ' +
+      'an expression of those; a name in it need not be in scope where the ' +
+      'declaration goes'));
+
+  // --- a SELECTION, when there is one, must be one literal of code ---------
+  Tok := Default(TPasToken);
+  Tok.Kind := ptEnd;
+  if AReq.HasSelection then
+  begin
+    if (AStartCol0 < 0) or (AEndCol0 <= AStartCol0) then
+      Exit(SetWhy(AWhy, 'the selection is empty'));
+    Sel := Copy(ALines[ALine0], AStartCol0 + 1, AEndCol0 - AStartCol0);
+    Tok := TokenOfSelection(Content, ALine0, AStartCol0, AEndCol0, PrevKind, PrevText);
+    if Tok.Kind = ptEnd then
+    begin
+      // A selected unary minus together with its number is two tokens, and
+      // whether the minus belongs to the value depends on what stands before
+      // it - that is a question the user should answer, not us.
+      if (Length(Sel) > 1) and (Sel[1] = '-') then
+        Exit(SetWhy(AWhy, 'the minus may belong to the expression - select the number itself'));
+      Exit(SetWhy(AWhy, 'select exactly one number or string literal (and not inside a comment)'));
+    end;
+    if not (Tok.Kind in [ptNumber, ptString]) then
+      Exit(SetWhy(AWhy, 'only a number or a string literal can be replaced by a constant'));
+  end;
 
   // --- the name ------------------------------------------------------------
   Problem := DeclarationNameProblem(AName, 'constant');
@@ -842,7 +923,7 @@ begin
   if ASection = dsResourceString then
   begin
     if Kind <> dvString then
-      Exit(SetWhy(AWhy, 'a resourcestring holds a string - select a string literal'));
+      Exit(SetWhy(AWhy, 'a resourcestring holds a string - the value must be a string literal'));
     if not (APlace in [dplInterface, dplImplementation]) then
       Exit(SetWhy(AWhy, 'a resourcestring can only be declared at unit level'));
     if Trim(AType) <> '' then
@@ -873,14 +954,17 @@ begin
 
   // --- replace, then insert ------------------------------------------------
   Lines := Copy(ALines);
+  Hits := nil;
   if AReplaceAll then
   begin
+    // Keyed on the SELECTED literal, not on the (possibly edited) value -
+    // the other occurrences are the ones that look like what was selected.
     if APlace = dplLocal then
-      Hits := LiteralOccurrences(Content, Value, First, Last)
+      Hits := LiteralOccurrences(Content, Sel, First, Last)
     else
-      Hits := LiteralOccurrences(Content, Value, 0, High(ALines));
+      Hits := LiteralOccurrences(Content, Sel, 0, High(ALines));
   end
-  else
+  else if AReq.HasSelection then
     Hits := [Tok];
   // right to left per line, so the columns stay valid
   for I := High(Hits) downto 0 do
@@ -892,7 +976,9 @@ begin
     Inc(APlan.Replaced);
   end;
   if APlan.Replaced > 1 then
-    APlan.Note := Format('%d occurrences of %s replaced', [APlan.Replaced, Value]);
+    APlan.Note := Format('%d occurrences of %s replaced', [APlan.Replaced, Sel])
+  else if not AReq.HasSelection then
+    APlan.Note := 'declared only - nothing in the code was changed';
 
   case APlace of
     dplLocal:

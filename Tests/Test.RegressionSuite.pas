@@ -20,7 +20,10 @@ uses
   // its own helpers, so those two live here rather than only below.
   // System.SysUtils for TBytes - the line-ending fixture names it in its
   // own helper declaration.
+  // Expert.StatementRefactor for TDeclareRequest / TDeclarePlace, which the
+  // constant fixture names in its own request builder.
   DUnitX.TestFramework, System.SysUtils, Expert.UsesCleanup,
+  Expert.StatementRefactor,
   Expert.EditorHelperIntf;
 
 type
@@ -681,6 +684,9 @@ type
     function Unit1: TArray<string>;
     function ColOf(const ALine, AText: string): Integer;
     function Occurrences(const AText, AWhat: string): Integer;
+    function ReqFor(const ALines: TArray<string>; ALine0, AStart, AEnd: Integer;
+      const AName, AType: string; APlace: TDeclarePlace;
+      ASection: TDeclareSection; AReplaceAll: Boolean): TDeclareRequest;
   public
     [Test] procedure OnlyALiteralCanBecomeAConstant;
     [Test] procedure TheNameIsOfferedFromWhatTheValueMeans;
@@ -688,6 +694,10 @@ type
     [Test] procedure AResourceStringIsAUnitLevelStringOnly;
     [Test] procedure AUnitConstantJoinsTheSectionThatIsThere;
     [Test] procedure WhatWouldNotCompileIsRefusedWithAReason;
+    /// <summary>Request 2026-10-16: the value is the user's, not the
+    ///  selection's - and without a selection the whole thing is defined
+    ///  from scratch, where nothing in the code may change.</summary>
+    [Test] procedure TheValueIsEditableAndMayComeFromNowhere;
   end;
 
   /// <summary>Forum report 2026-10-15: Delphi had been installed by an admin
@@ -755,7 +765,7 @@ uses
   Expert.MoveToUnit, Expert.SafeDeletePlan, Expert.McpTools, Expert.WithRewriter,
   Expert.SemanticReplace, Expert.SelectionValidator, Expert.ExtractMethod,
   Expert.SignatureEdit, Expert.MethodEdit, System.StrUtils,
-  Expert.DebugConsistency, DIH.Placeholders, Expert.StatementRefactor;
+  Expert.DebugConsistency, DIH.Placeholders;
 
 const
   NL = sLineBreak;
@@ -5582,6 +5592,21 @@ begin
   end;
 end;
 
+// Goes through DeclareRequestFor, so what the editor will hand the dialog
+// is what the tests exercise.
+function TDeclareConstantTests.ReqFor(const ALines: TArray<string>;
+  ALine0, AStart, AEnd: Integer; const AName, AType: string;
+  APlace: TDeclarePlace; ASection: TDeclareSection;
+  AReplaceAll: Boolean): TDeclareRequest;
+begin
+  Result := DeclareRequestFor(ALines, ALine0, AStart, AEnd);
+  Result.Name := AName;
+  Result.TypeName := AType;
+  Result.Place := APlace;
+  Result.Section := ASection;
+  Result.ReplaceAll := AReplaceAll;
+end;
+
 function TDeclareConstantTests.ColOf(const ALine, AText: string): Integer;
 begin
   Result := Pos(AText, ALine) - 1;
@@ -5633,8 +5658,8 @@ var
 begin
   Lines := Unit1;
   Col := ColOf(Lines[21], '5000');
-  Assert.IsTrue(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'CTimeout', '',
-    dplLocal, dsConst, False, Plan, Why), Why);
+  Assert.IsTrue(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col + 4, 'CTimeout', '',
+    dplLocal, dsConst, False), Plan, Why), Why);
   var Text := string.Join(#10, Plan.NewLines);
   // The routine already has a VAR section, so the const needs its own - a
   // const cannot be added under a var.
@@ -5646,8 +5671,8 @@ begin
   Assert.AreEqual(1, Plan.Replaced);
   // ...and with replace-all the second use goes too, but the one in the
   // comment never does.
-  Assert.IsTrue(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'CTimeout', '',
-    dplLocal, dsConst, True, Plan, Why), Why);
+  Assert.IsTrue(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col + 4, 'CTimeout', '',
+    dplLocal, dsConst, True), Plan, Why), Why);
   Text := string.Join(#10, Plan.NewLines);
   Assert.AreEqual(2, Plan.Replaced, 'both uses in the routine');
   Assert.IsTrue(Text.Contains('  if I > CTimeout then'), 'the second use too');
@@ -5665,25 +5690,22 @@ begin
   Lines := Unit1;
   Col := ColOf(Lines[23], '''Datei');
   // What Delphi allows: a string, at unit level, untyped.
-  Assert.IsTrue(PlanDeclareFromSelection(Lines, 23, Col,
-    Col + Length('''Datei nicht gefunden'''), 'SNotFound', '',
-    dplImplementation, dsResourceString, False, Plan, Why), Why);
+  Assert.IsTrue(PlanDeclare(Lines, ReqFor(Lines, 23, Col, Col + Length('''Datei nicht gefunden'''), 'SNotFound', '',
+    dplImplementation, dsResourceString, False), Plan, Why), Why);
   var Text := string.Join(#10, Plan.NewLines);
   Assert.IsTrue(Text.Contains('resourcestring' + #10 +
     '  SNotFound = ''Datei nicht gefunden'';'), 'the section is created: ' + Plan.DeclText);
   Assert.IsTrue(Text.Contains('ShowMessage(SNotFound);'), 'and used at the site');
   // ...and what it does not.
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 23, Col,
-    Col + Length('''Datei nicht gefunden'''), 'SNotFound', '',
-    dplLocal, dsResourceString, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 23, Col, Col + Length('''Datei nicht gefunden'''), 'SNotFound', '',
+    dplLocal, dsResourceString, False), Plan, Why));
   Assert.IsTrue(Why.Contains('unit level'), Why);
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 23, Col,
-    Col + Length('''Datei nicht gefunden'''), 'SNotFound', 'string',
-    dplImplementation, dsResourceString, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 23, Col, Col + Length('''Datei nicht gefunden'''), 'SNotFound', 'string',
+    dplImplementation, dsResourceString, False), Plan, Why));
   Assert.IsTrue(Why.Contains('no type'), Why);
   Col := ColOf(Lines[21], '5000');
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'SNotFound', '',
-    dplImplementation, dsResourceString, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col + 4, 'SNotFound', '',
+    dplImplementation, dsResourceString, False), Plan, Why));
   Assert.IsTrue(Why.Contains('string literal'), Why);
 end;
 
@@ -5698,37 +5720,38 @@ begin
   Col := ColOf(Lines[21], '5000');
 
   // A name that is not a name.
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'begin', '',
-    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col + 4, 'begin', '',
+    dplLocal, dsConst, False), Plan, Why));
   Assert.IsTrue(Why.Contains('reserved word'), Why);
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, '2Foo', '',
-    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col + 4, '2Foo', '',
+    dplLocal, dsConst, False), Plan, Why));
   Assert.IsTrue(Why.Contains('identifier'), Why);
 
   // A name that is taken: at unit level the whole unit counts, locally the
   // routine - and "I" is a local of exactly this routine.
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'I', '',
-    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col + 4, 'I', '',
+    dplLocal, dsConst, False), Plan, Why));
   Assert.IsTrue(Why.Contains('already occurs'), Why);
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 4, 'FCount', '',
-    dplInterface, dsConst, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col + 4, 'FCount', '',
+    dplInterface, dsConst, False), Plan, Why));
   Assert.IsTrue(Why.Contains('already occurs'), Why);
 
   // The number in the COMMENT is not code.
   var CCol := ColOf(Lines[24], '5000');
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 24, CCol, CCol + 4, 'CX', '',
-    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 24, CCol, CCol + 4, 'CX', '',
+    dplLocal, dsConst, False), Plan, Why));
   Assert.IsTrue(Why.Contains('comment'), Why);
 
   // Half a literal is not a literal.
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col + 2, 'CX', '',
-    dplLocal, dsConst, False, Plan, Why));
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col + 2, 'CX', '',
+    dplLocal, dsConst, False), Plan, Why));
   Assert.IsTrue(Why.Contains('exactly one'), Why);
 
-  // Nothing selected.
-  Assert.IsFalse(PlanDeclareFromSelection(Lines, 21, Col, Col, 'CX', '',
-    dplLocal, dsConst, False, Plan, Why));
-  Assert.IsTrue(Why.Contains('nothing is selected'), Why);
+  // Nothing selected and nothing typed: since the value is the user's own
+  // field, that is the question to ask - not "select something".
+  Assert.IsFalse(PlanDeclare(Lines, ReqFor(Lines, 21, Col, Col, 'CX', '',
+    dplLocal, dsConst, False), Plan, Why));
+  Assert.IsTrue(Why.Contains('enter a value'), Why);
 end;
 
 procedure TDeclareConstantTests.AUnitConstantJoinsTheSectionThatIsThere;
@@ -5756,18 +5779,87 @@ begin
     'end.',                           // 12
     ''];
   Col := ColOf(Lines[9], '250');
-  Assert.IsTrue(PlanDeclareFromSelection(Lines, 9, Col, Col + 3, 'CDelay', '',
-    dplImplementation, dsConst, False, Plan, Why), Why);
+  Assert.IsTrue(PlanDeclare(Lines, ReqFor(Lines, 9, Col, Col + 3, 'CDelay', '',
+    dplImplementation, dsConst, False), Plan, Why), Why);
   var Text := string.Join(#10, Plan.NewLines);
   Assert.AreEqual(1, Occurrences(Text, 'const'), 'no second const section');
   Assert.IsTrue(Text.Contains('  CFirst = 1;' + #10 + '  CDelay = 250;'),
     'it joins the one that is there: ' + Text);
   Assert.IsTrue(Text.Contains('  Sleep(CDelay);'));
   // A typed one is written as a typed constant.
-  Assert.IsTrue(PlanDeclareFromSelection(Lines, 9, Col, Col + 3, 'CDelay',
-    'Cardinal', dplImplementation, dsConst, False, Plan, Why), Why);
+  Assert.IsTrue(PlanDeclare(Lines, ReqFor(Lines, 9, Col, Col + 3, 'CDelay', 'Cardinal',
+    dplImplementation, dsConst, False), Plan, Why), Why);
   Assert.IsTrue(string.Join(#10, Plan.NewLines).Contains('  CDelay: Cardinal = 250;'),
     Plan.DeclText);
+end;
+
+procedure TDeclareConstantTests.TheValueIsEditableAndMayComeFromNowhere;
+var
+  Lines: TArray<string>;
+  Req: TDeclareRequest;
+  Plan: TDeclarePlan;
+  Why: string;
+  Col: Integer;
+begin
+  Lines := Unit1;
+
+  // The selection OFFERS the value and the name - that is all it does.
+  Col := ColOf(Lines[21], '5000');
+  Req := DeclareRequestFor(Lines, 21, Col, Col + 4);
+  Assert.IsTrue(Req.HasSelection);
+  Assert.AreEqual('5000', Req.Value, 'the value is offered from the selection');
+  Assert.AreEqual('CTimeout', Req.Name, 'and so is the name');
+
+  // ...and the user may change it. The DECLARATION gets the new value, the
+  // code gets the name where the selection was.
+  Req.Value := '$1388';
+  Req.Name := 'CTimeout';
+  Req.Place := dplLocal;
+  Assert.IsTrue(PlanDeclare(Lines, Req, Plan, Why), Why);
+  var Text := string.Join(#10, Plan.NewLines);
+  Assert.IsTrue(Text.Contains('  CTimeout = $1388;'),
+    'the edited value is what is declared: ' + Plan.DeclText);
+  Assert.IsTrue(Text.Contains('  Timeout := CTimeout;'), 'and the use site');
+  Assert.AreEqual(1, Plan.Replaced);
+
+  // An edited value still has to BE a value.
+  Req.Value := 'Factor * 2';
+  Assert.IsFalse(PlanDeclare(Lines, Req, Plan, Why));
+  Assert.IsTrue(Why.Contains('must be a literal'), Why);
+
+  // FROM SCRATCH: no selection. The caret still says which routine dplLocal
+  // means, but nothing in the code is touched.
+  Req := DeclareRequestFor(Lines, 21, 0, 0);
+  Assert.IsFalse(Req.HasSelection, 'nothing selected');
+  Assert.AreEqual('CValue', Req.Name, 'a name to start from');
+  Req.Name := 'CRetries';
+  Req.Value := '3';
+  Req.Place := dplLocal;
+  Assert.IsTrue(PlanDeclare(Lines, Req, Plan, Why), Why);
+  Text := string.Join(#10, Plan.NewLines);
+  Assert.IsTrue(Text.Contains('  CRetries = 3;'), Plan.DeclText);
+  Assert.AreEqual(0, Plan.Replaced, 'nothing was replaced');
+  Assert.IsTrue(Plan.Note.Contains('nothing in the code'), Plan.Note);
+  Assert.IsTrue(Text.Contains('  Timeout := 5000;'),
+    'the line the caret was on is untouched');
+  // Replace-all cannot mean anything without a selection, so it is ignored
+  // rather than guessing which literal was meant.
+  Req.ReplaceAll := True;
+  Assert.IsTrue(PlanDeclare(Lines, Req, Plan, Why), Why);
+  Assert.AreEqual(0, Plan.Replaced, 'and it stays ignored');
+  // From scratch at unit level needs no routine at all.
+  Req := DeclareRequestFor(Lines, 0, 0, 0);
+  Req.Name := 'SCaption';
+  Req.Value := '''Titel''';
+  Req.Place := dplInterface;
+  Req.Section := dsResourceString;
+  Assert.IsTrue(PlanDeclare(Lines, Req, Plan, Why), Why);
+  Assert.IsTrue(string.Join(#10, Plan.NewLines).Contains(
+    'resourcestring' + #10 + '  SCaption = ''Titel'';'), Plan.DeclText);
+  // ...and an empty value is the one thing it cannot do.
+  Req.Value := '  ';
+  Assert.IsFalse(PlanDeclare(Lines, Req, Plan, Why));
+  Assert.IsTrue(Why.Contains('enter a value'), Why);
 end;
 
 { TInstallOutputRootTests }
