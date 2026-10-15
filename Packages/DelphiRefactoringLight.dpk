@@ -72,6 +72,7 @@ contains
   Expert.UnitRenameWatcher in '..\Source\Expert.UnitRenameWatcher.pas',
   Expert.PluginSettings in '..\Source\Expert.PluginSettings.pas',
   Expert.LspPrewarmer in '..\Source\Expert.LspPrewarmer.pas',
+  Expert.LineEndingWatcher in '..\Source\Expert.LineEndingWatcher.pas',
   Expert.IdentifierCheck in '..\Source\Expert.IdentifierCheck.pas',
   Expert.SignatureCheck in '..\Source\Expert.SignatureCheck.pas',
   Expert.SignatureCheckDialog in '..\Source\Expert.SignatureCheckDialog.pas',

@@ -39,6 +39,8 @@ type
     class var FRenameScope: Integer;
     class var FRenameBackup: Boolean;
     class var FUsesCleanupKeepUnits: string;
+    class var FLineEndingCheck: Boolean;
+    class var FLineEndingAutoFix: Boolean;
     class var FLoaded: Boolean;
     class function LegacyRegistryKey: string; static;
     class procedure MigrateLegacyKey; static;
@@ -135,6 +137,20 @@ type
     /// really are unused.</summary>
     class property UsesCleanupKeepUnits: string
       read FUsesCleanupKeepUnits write FUsesCleanupKeepUnits;
+
+    /// <summary>Check a unit's line endings when the IDE opens it and warn
+    ///  when they are not plain CRLF. Delphi copes badly with LF-only and
+    ///  worst with MIXED endings (breakpoints on the wrong line, a
+    ///  half-converted file after a checkout), and the warning is the only
+    ///  moment at which nobody has edited the buffer yet. On by default:
+    ///  it reads the file the IDE has just read anyway.</summary>
+    class property LineEndingCheck: Boolean
+      read FLineEndingCheck write FLineEndingCheck;
+    /// <summary>...and fix it without asking. Off by default - rewriting
+    ///  every line break of a file is a change the user should have said
+    ///  yes to once. The dialog's "always" option is what turns it on.</summary>
+    class property LineEndingAutoFix: Boolean
+      read FLineEndingAutoFix write FLineEndingAutoFix;
 
     class function DefaultPrewarm: Boolean; static;
   end;
@@ -278,6 +294,9 @@ begin
       FRenameBackup := ReadBoolDef(Reg, 'RenameBackup', FRenameBackup);
       FUsesCleanupKeepUnits := ReadStrDef(Reg, 'UsesCleanupKeepUnits',
         FUsesCleanupKeepUnits);
+      FLineEndingCheck := ReadBoolDef(Reg, 'LineEndingCheck', FLineEndingCheck);
+      FLineEndingAutoFix := ReadBoolDef(Reg, 'LineEndingAutoFix',
+        FLineEndingAutoFix);
     finally
       Reg.CloseKey;
     end;
@@ -319,6 +338,8 @@ begin
   FRenameScope := 0;
   FRenameBackup := True;
   FUsesCleanupKeepUnits := '';
+  FLineEndingCheck := True;
+  FLineEndingAutoFix := False;
   FLoaded := True;
 
   try
@@ -348,6 +369,9 @@ begin
       FRenameBackup := ReadBoolDef(Reg, 'RenameBackup', FRenameBackup);
       FUsesCleanupKeepUnits := ReadStrDef(Reg, 'UsesCleanupKeepUnits',
         FUsesCleanupKeepUnits);
+      FLineEndingCheck := ReadBoolDef(Reg, 'LineEndingCheck', FLineEndingCheck);
+      FLineEndingAutoFix := ReadBoolDef(Reg, 'LineEndingAutoFix',
+        FLineEndingAutoFix);
     finally
       Reg.CloseKey;
     end;
@@ -382,6 +406,8 @@ begin
       Reg.WriteInteger('RenameScope', FRenameScope);
       Reg.WriteBool('RenameBackup', FRenameBackup);
       Reg.WriteString('UsesCleanupKeepUnits', FUsesCleanupKeepUnits);
+      Reg.WriteBool('LineEndingCheck', FLineEndingCheck);
+      Reg.WriteBool('LineEndingAutoFix', FLineEndingAutoFix);
     finally
       Reg.CloseKey;
     end;

@@ -18,7 +18,10 @@ interface
 uses
   // The designer-managed uses fixture names TUsesEntryInfo / TUsesVerdict in
   // its own helpers, so those two live here rather than only below.
-  DUnitX.TestFramework, Expert.UsesCleanup, Expert.EditorHelperIntf;
+  // System.SysUtils for TBytes - the line-ending fixture names it in its
+  // own helper declaration.
+  DUnitX.TestFramework, System.SysUtils, Expert.UsesCleanup,
+  Expert.EditorHelperIntf;
 
 type
   [TestFixture]
@@ -617,6 +620,31 @@ type
     [Test] procedure APreviewReportsOnlyRealChanges;
   end;
 
+  /// <summary>The line-ending check the IDE runs when a file is opened
+  ///  (user request, 2026-10-15: "Delphi kommt nicht damit klar, wenn nicht
+  ///  das volle Windows Zeilenende verwendet wird, insbesondere wenn
+  ///  verschiedene in der Datei vorkommen"). The classification and the
+  ///  three gates that decide whether a file may be REWRITTEN are pure;
+  ///  the warning dialog and the notifier are not, and the note in
+  ///  CLAUDE.md says so.</summary>
+  [TestFixture]
+  TLineEndingCheckTests = class
+  private
+    FDir: string;
+    function WriteRaw(const AName: string; const ABytes: TBytes): string;
+  public
+    [Setup] procedure Setup;
+    [TearDown] procedure TearDown;
+    [Test] procedure MixedAndLfOnlyAreNamedAsTheProblemTheyAre;
+    /// <summary>The gates: only source text, never a binary form file -
+    ///  the fix rewrites BYTES, so a wrong answer here destroys a file.</summary>
+    [Test] procedure NothingButSourceTextMayBeRewritten;
+    /// <summary>The fix the dialog offers, end to end: every break becomes
+    ///  CRLF, the encoding and the content survive, and a second run is a
+    ///  no-op.</summary>
+    [Test] procedure TheFixProducesCrlfAndChangesNothingElse;
+  end;
+
   [TestFixture]
   TCheckScopeTests = class
   public
@@ -662,7 +690,7 @@ type
 implementation
 
 uses
-  System.SysUtils, System.IOUtils, System.Classes, System.SyncObjs,
+  System.IOUtils, System.Classes, System.SyncObjs,
   Delphi.FileEncoding, Expert.UsesEditor, Expert.AutoImport, Expert.UnitIndex,
   Expert.DfmEventCheck, Expert.SignatureCheck, Expert.InterfaceGuidCheck,
   Expert.WithScanner, Lsp.Uri, Rename.WorkspaceEdit, Expert.VcsBlame,
@@ -671,7 +699,8 @@ uses
   System.Win.Registry, Expert.PluginSettings, Expert.UsesGraph,
   Expert.MoveToUnit, Expert.SafeDeletePlan, Expert.McpTools, Expert.WithRewriter,
   Expert.SemanticReplace, Expert.SelectionValidator, Expert.ExtractMethod,
-  Expert.SignatureEdit, Expert.MethodEdit, System.StrUtils;
+  Expert.SignatureEdit, Expert.MethodEdit, System.StrUtils,
+  Expert.DebugConsistency;
 
 const
   NL = sLineBreak;
@@ -5052,6 +5081,144 @@ begin
     'the first mention reads it');
 end;
 
+{ TLineEndingCheckTests }
+
+procedure TLineEndingCheckTests.Setup;
+begin
+  FDir := TPath.Combine(TPath.GetTempPath, 'rl_eol_' + TGUID.NewGuid.ToString);
+  TDirectory.CreateDirectory(FDir);
+end;
+
+procedure TLineEndingCheckTests.TearDown;
+begin
+  try
+    if TDirectory.Exists(FDir) then TDirectory.Delete(FDir, True);
+  except
+  end;
+end;
+
+function TLineEndingCheckTests.WriteRaw(const AName: string;
+  const ABytes: TBytes): string;
+begin
+  Result := TPath.Combine(FDir, AName);
+  TFile.WriteAllBytes(Result, ABytes);
+end;
+
+procedure TLineEndingCheckTests.MixedAndLfOnlyAreNamedAsTheProblemTheyAre;
+var
+  Info: TLineEndingInfo;
+
+  function Classify(const AText: string): TLineEndingInfo;
+  begin
+    Result := ClassifyLineEndings(TEncoding.UTF8.GetBytes(AText));
+  end;
+
+begin
+  // The normal case must stay quiet - this check runs on every file the
+  // IDE opens.
+  Info := Classify('unit A;' + #13#10 + 'end.' + #13#10);
+  Assert.IsTrue(Info.Kind = lekCrLf, 'all CRLF');
+  Assert.IsFalse(Info.NeedsFix, 'nothing to fix');
+  Assert.AreEqual('', LineEndingProblemText(Info), 'and nothing to say');
+
+  // A one-line file has no line break at all and is not a problem either.
+  Info := Classify('unit A;');
+  Assert.IsTrue(Info.Kind = lekNone, 'no break');
+  Assert.IsFalse(Info.NeedsFix, 'no break is no defect');
+
+  // The git-checkout case.
+  Info := Classify('unit A;' + #10 + 'end.' + #10);
+  Assert.IsTrue(Info.Kind = lekLf, 'LF only');
+  Assert.IsTrue(Info.NeedsFix, 'LF only must be offered');
+  Assert.IsTrue(LineEndingProblemText(Info).Contains('LF only'),
+    'the text names LF: ' + LineEndingProblemText(Info));
+
+  // CR only.
+  Info := Classify('unit A;' + #13 + 'end.' + #13);
+  Assert.IsTrue(Info.Kind = lekCr, 'CR only');
+  Assert.IsTrue(Info.NeedsFix, 'CR only must be offered');
+
+  // THE REPORTED CASE: more than one sort in ONE file, which is what the
+  // IDE handles worst. The counts have to appear, because they are what
+  // tells the user it is the half-converted file they feared.
+  Info := Classify('a' + #13#10 + 'b' + #10 + 'c' + #13 + 'd' + #13#10);
+  Assert.IsTrue(Info.Kind = lekMixed, 'mixed');
+  Assert.AreEqual(2, Info.CrLf, 'two CRLF');
+  Assert.AreEqual(1, Info.LfOnly, 'one LF');
+  Assert.AreEqual(1, Info.CrOnly, 'one CR');
+  var Text := LineEndingProblemText(Info);
+  Assert.IsTrue(Text.Contains('MIXED'), 'said plainly: ' + Text);
+  Assert.IsTrue(Text.Contains('2 CRLF') and Text.Contains('1 LF') and
+    Text.Contains('1 CR'), 'with the counts: ' + Text);
+end;
+
+procedure TLineEndingCheckTests.NothingButSourceTextMayBeRewritten;
+var
+  Dfm: TBytes;
+begin
+  Assert.IsTrue(LineEndingCheckCandidate('C:\x\U.pas'), '.pas');
+  Assert.IsTrue(LineEndingCheckCandidate('C:\x\U.INC'), '.inc, any case');
+  Assert.IsTrue(LineEndingCheckCandidate('C:\x\P.dpr'), '.dpr');
+  Assert.IsTrue(LineEndingCheckCandidate('C:\x\P.dpk'), '.dpk');
+  // A FORM FILE IS THE DANGEROUS ONE: a binary .dfm is bytes, and turning
+  // an $0A inside it into $0D$0A would destroy the form.
+  Assert.IsFalse(LineEndingCheckCandidate('C:\x\U.dfm'), '.dfm never');
+  Assert.IsFalse(LineEndingCheckCandidate('C:\x\U.fmx'), '.fmx never');
+  // The IDE rewrites these itself.
+  Assert.IsFalse(LineEndingCheckCandidate('C:\x\P.dproj'), '.dproj never');
+  Assert.IsFalse(LineEndingCheckCandidate('C:\x\readme.txt'), '.txt never');
+
+  // The second gate, for a form saved under a source name: $FF 'TPF0'.
+  Dfm := [$FF, Ord('T'), Ord('P'), Ord('F'), Ord('0'), 1, 2, 10, 3];
+  Assert.IsTrue(LooksBinaryContent(Dfm), 'a binary form is binary');
+  Assert.IsFalse(LooksBinaryContent(TEncoding.UTF8.GetBytes('unit A;'#13#10)),
+    'plain source is not');
+  // UTF-16 text is full of NUL bytes and must NOT read as binary - both
+  // the counter and the converter handle it by code unit.
+  Assert.IsFalse(LooksBinaryContent(TEncoding.Unicode.GetPreamble +
+    TEncoding.Unicode.GetBytes('unit A;'#13#10)), 'UTF-16 text is text');
+  Assert.IsTrue(LooksBinaryContent([Ord('M'), Ord('Z'), 0, 1, 2]),
+    'a NUL without a UTF-16 BOM is binary');
+end;
+
+procedure TLineEndingCheckTests.TheFixProducesCrlfAndChangesNothingElse;
+var
+  Path: string;
+  Before, After: TBytes;
+  Info: TLineEndingInfo;
+begin
+  // UTF-8 WITH BOM and mixed endings - our own sources' encoding, and the
+  // shape a half-converted checkout has.
+  Before := TEncoding.UTF8.GetPreamble +
+    TEncoding.UTF8.GetBytes('unit A;' + #13#10 + '// Grösse' + #10 +
+      'implementation' + #13 + 'end.' + #10);
+  Path := WriteRaw('U.pas', Before);
+
+  Assert.IsTrue(ConvertFileToCrLf(Path), 'it had something to fix');
+  After := TFile.ReadAllBytes(Path);
+  Info := ClassifyLineEndings(After);
+  Assert.IsTrue(Info.Kind = lekCrLf, 'all CRLF afterwards');
+  Assert.AreEqual(4, Info.CrLf, 'all four breaks');
+
+  // The ENCODING and the content must survive - this rewrites bytes.
+  Assert.IsTrue((After[0] = $EF) and (After[1] = $BB) and (After[2] = $BF),
+    'the BOM is still there');
+  var Txt := TEncoding.UTF8.GetString(After, 3, Length(After) - 3);
+  Assert.IsTrue(Txt.Contains('Grösse'), 'the umlaut survived: ' + Txt);
+  Assert.AreEqual('unit A;|// Grösse|implementation|end.|',
+    Txt.Replace(#13#10, '|'), 'nothing but the breaks changed');
+
+  // Idempotent: nothing left to do means False, not another rewrite.
+  Assert.IsFalse(ConvertFileToCrLf(Path), 'a second run changes nothing');
+  // '=' on two dynamic arrays compares REFERENCES, so it is always False
+  // for two separate reads - my first version of this assertion failed for
+  // that reason alone. Compare the bytes.
+  var Again := TFile.ReadAllBytes(Path);
+  Assert.AreEqual(Length(After), Length(Again), 'same length');
+  Assert.IsTrue((Length(Again) = 0) or
+    CompareMem(@After[0], @Again[0], Length(After)), 'and writes nothing');
+end;
+
 { TCheckScopeTests }
 
 procedure TCheckScopeTests.ADuplicateUnitNameIsReportedAsSkipped;
@@ -5390,6 +5557,7 @@ initialization
   TDUnitX.RegisterTestFixture(TRemoveWithSafetyTests);
   TDUnitX.RegisterTestFixture(TUnitRenameScopeTests);
   TDUnitX.RegisterTestFixture(TDfmAliasOnlyTests);
+  TDUnitX.RegisterTestFixture(TLineEndingCheckTests);
   TDUnitX.RegisterTestFixture(TCheckScopeTests);
   TDUnitX.RegisterTestFixture(TExtractAndCompletionTests);
 

@@ -76,7 +76,13 @@ type
     FKeepLabel: TLabel;
     FKeepEdit: TEdit;
     FKeepNote: TLabel;
+    // user request 2026-10-15: the line-ending check at file open
+    FEolGroup: TGroupBox;
+    FEolCheckBox: TCheckBox;
+    FEolAutoBox: TCheckBox;
+    FEolNote: TLabel;
     procedure EnsureKeepRow;
+    procedure EnsureEolRow;
     procedure EnsureLspLogBox;
     procedure EnsureExtraRows;
     function EditFor(Kind: TShortcutKind): TEdit;
@@ -160,6 +166,41 @@ begin
   FKeepNote.Caption := '(Units the form designer requires are detected ' +
     'automatically - this list is only for what it cannot report. Keep the ' +
     'masks narrow: "cx*" would also protect cx units that really are unused.)';
+end;
+
+procedure TLspOptionsFrame.EnsureEolRow;
+begin
+  if FEolGroup <> nil then Exit;
+  FEolGroup := TGroupBox.Create(Self);
+  FEolGroup.Parent := Self;
+  FEolGroup.Caption := 'Line endings';
+  FEolGroup.Left := grpBlame.Left;
+  FEolGroup.Width := grpBlame.Width;
+  FEolGroup.Anchors := grpBlame.Anchors;
+
+  FEolCheckBox := TCheckBox.Create(Self);
+  FEolCheckBox.Parent := FEolGroup;
+  FEolCheckBox.Caption := 'Warn when a file is opened that is not CRLF';
+  FEolCheckBox.Hint := 'LF-only or mixed line endings put breakpoints on the ' +
+    'wrong line. The warning comes at the open, when nothing has been typed ' +
+    'yet, and offers to correct the file.';
+  FEolCheckBox.ShowHint := True;
+
+  FEolAutoBox := TCheckBox.Create(Self);
+  FEolAutoBox.Parent := FEolGroup;
+  FEolAutoBox.Caption := 'Correct them without asking';
+  FEolAutoBox.Hint := 'Rewrites the line breaks to CRLF as soon as such a ' +
+    'file is opened. The dialog''s "always" answer turns this on too.';
+  FEolAutoBox.ShowHint := True;
+
+  FEolNote := TLabel.Create(Self);
+  FEolNote.Parent := FEolGroup;
+  FEolNote.WordWrap := True;
+  FEolNote.AutoSize := False;
+  FEolNote.Caption := '(Source files only - .pas, .inc, .dpr, .dpk. A binary ' +
+    'form file and anything below the RAD Studio installation is never ' +
+    'touched, and a unit with unsaved changes is named instead of being ' +
+    'rewritten. The encoding stays as it is.)';
 end;
 
 procedure TLspOptionsFrame.EnsureLspLogBox;
@@ -364,8 +405,22 @@ begin
   FKeepNote.SetBounds(34, Row, FKeepGroup.ClientWidth - 34 - Gap, 3 * LineH);
   FKeepGroup.Height := FKeepNote.Top + FKeepNote.Height + Gap;
 
+  // ---- line endings ----------------------------------------------------
+  EnsureEolRow;
+  FEolGroup.Top := FKeepGroup.Top + FKeepGroup.Height + Gap;
+  FEolGroup.Width := FKeepGroup.Width;
+  Row := 20;
+  FEolCheckBox.SetBounds(16, Row, FEolGroup.ClientWidth - 16 - Gap,
+    FEolCheckBox.Height);
+  Row := Row + FEolCheckBox.Height + 4;
+  FEolAutoBox.SetBounds(34, Row, FEolGroup.ClientWidth - 34 - Gap,
+    FEolAutoBox.Height);
+  Row := Row + FEolAutoBox.Height + 6;
+  FEolNote.SetBounds(34, Row, FEolGroup.ClientWidth - 34 - Gap, 3 * LineH);
+  FEolGroup.Height := FEolNote.Top + FEolNote.Height + Gap;
+
   // ---- and only THEN the button ---------------------------------------
-  btnDefaults.Top := FKeepGroup.Top + FKeepGroup.Height + 10;
+  btnDefaults.Top := FEolGroup.Top + FEolGroup.Height + 10;
 
   // THE FRAME'S OWN HEIGHT must follow the content. The options host
   // scrolls its page by that height, so a frame that stays at its
@@ -414,6 +469,9 @@ begin
   cbxTortoise.Checked := TPluginSettings.BlameUseTortoise;
   EnsureKeepRow;
   FKeepEdit.Text := TPluginSettings.UsesCleanupKeepUnits;
+  EnsureEolRow;
+  FEolCheckBox.Checked := TPluginSettings.LineEndingCheck;
+  FEolAutoBox.Checked := TPluginSettings.LineEndingAutoFix;
 end;
 
 procedure TLspOptionsFrame.StoreToSettings;
@@ -448,6 +506,10 @@ begin
   TPluginSettings.LiveBlame := cbxLiveBlame.Checked;
   if FKeepEdit <> nil then
     TPluginSettings.UsesCleanupKeepUnits := Trim(FKeepEdit.Text);
+  if FEolCheckBox <> nil then
+    TPluginSettings.LineEndingCheck := FEolCheckBox.Checked;
+  if FEolAutoBox <> nil then
+    TPluginSettings.LineEndingAutoFix := FEolAutoBox.Checked;
   ApplyBlameSettings;
 end;
 
@@ -504,6 +566,9 @@ begin
   EnsureLspLogBox;
   FLspLogBox.Checked := False;
   FVerifyBox.Checked := True;
+  EnsureEolRow;
+  FEolCheckBox.Checked := True;
+  FEolAutoBox.Checked := False;
   // The keep list is the user's own data, gathered one false positive at a
   // time - "restore defaults" must not silently throw it away.
 end;

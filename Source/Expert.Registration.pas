@@ -19,6 +19,7 @@ uses
   Expert.FindReferencesWizard, Expert.FindImplementationsWizard,
   Expert.SignatureCheckWizard, Expert.KeyBinding, Expert.RestartHint,
   Expert.ContextMenu, Expert.UnitRenameWatcher, Expert.LspPrewarmer,
+  Expert.LineEndingWatcher,
   Expert.WithRefactorWizard,
   Expert.UnitReferencesWizard, Expert.MoveToUnitWizard,
   Expert.Shortcuts, Expert.OptionsPage, Expert.UnitIndex, Expert.AutoImport,
@@ -98,6 +99,10 @@ begin
   // (File > Save As etc.).
   UnitRenameWatcherInstance := TUnitRenameWatcher.Create;
   UnitRenameWatcherInstance.Install;
+
+  // Line endings: warns when a file the IDE just opened is not plain CRLF
+  // and offers to correct it (user request, 2026-10-15).
+  InstallLineEndingWatcher;
 
   // Pre-warm our DelphiLSP when a project is opened, so the first
   // refactoring action doesn't have to pay the cold-start cost.
@@ -182,6 +187,7 @@ finalization
   StopAutoImportLive;
   TExpertsShortCut.RemoveListener(TShortcutChangeHook.HandleChanged);
   UnregisterOptionsPage;
+  UninstallLineEndingWatcher;
   FreeAndNil(LspPrewarmerInstance);
   FreeAndNil(UnitRenameWatcherInstance);
   FreeAndNil(ContextMenuInstance);

@@ -92,6 +92,45 @@ procedure CountLineEndings(const ABytes: TBytes; out ACrLf, ALfOnly, ACrOnly: In
 function ConvertFileToCrLf(const AFile: string): Boolean;
 
 type
+  /// <summary>What a file's line breaks look like as a whole.</summary>
+  TLineEndingKind = (
+    lekNone,     // no line break at all (a one-line file)
+    lekCrLf,     // all CRLF - what Delphi expects
+    lekLf,       // all LF (a git checkout without autocrlf)
+    lekCr,       // all CR (classic Mac, or a half-converted file)
+    lekMixed);   // more than one of them - the case the IDE handles worst
+
+  TLineEndingInfo = record
+    CrLf: Integer;
+    LfOnly: Integer;
+    CrOnly: Integer;
+    Kind: TLineEndingKind;
+    /// <summary>True for everything but lekNone and lekCrLf.</summary>
+    NeedsFix: Boolean;
+  end;
+
+/// <summary>Classifies the line breaks of raw file bytes. Same counting as
+///  CountLineEndings (UTF-16 BOMs handled), plus the verdict the warning
+///  and the fix decision are made from.</summary>
+function ClassifyLineEndings(const ABytes: TBytes): TLineEndingInfo;
+
+/// <summary>One sentence naming what is wrong, with the counts - "mixed
+///  line endings (12 CRLF, 3 LF)". '' when nothing needs fixing.</summary>
+function LineEndingProblemText(const AInfo: TLineEndingInfo): string;
+
+/// <summary>A file whose line endings we may check AND rewrite: Delphi
+///  source text only. Deliberately NOT .dfm/.fmx - a BINARY form file is
+///  bytes, and turning an $0A inside it into $0D$0A would destroy it;
+///  and not .dproj/.groupproj, which the IDE rewrites itself.</summary>
+function LineEndingCheckCandidate(const AFileName: string): Boolean;
+
+/// <summary>Content that must never be rewritten byte-wise: a binary form
+///  file ($FF 'TPF0'), or a NUL byte in a file that is not UTF-16. The
+///  extension gate above is the first guard; this is the second, because a
+///  wrong answer here corrupts a file.</summary>
+function LooksBinaryContent(const ABytes: TBytes): Boolean;
+
+type
   TSourceDirective = record
     Line: Integer;       // 1-based
     Text: string;        // e.g. '{$D-}'
@@ -282,6 +321,96 @@ begin
   except
     Result := False;
   end;
+end;
+
+function ClassifyLineEndings(const ABytes: TBytes): TLineEndingInfo;
+var
+  Sorts: Integer;
+begin
+  Result := Default(TLineEndingInfo);
+  CountLineEndings(ABytes, Result.CrLf, Result.LfOnly, Result.CrOnly);
+  Sorts := 0;
+  if Result.CrLf > 0 then Inc(Sorts);
+  if Result.LfOnly > 0 then Inc(Sorts);
+  if Result.CrOnly > 0 then Inc(Sorts);
+  if Sorts = 0 then
+    Result.Kind := lekNone
+  else if Sorts > 1 then
+    Result.Kind := lekMixed
+  else if Result.CrLf > 0 then
+    Result.Kind := lekCrLf
+  else if Result.LfOnly > 0 then
+    Result.Kind := lekLf
+  else
+    Result.Kind := lekCr;
+  Result.NeedsFix := not (Result.Kind in [lekNone, lekCrLf]);
+end;
+
+function LineEndingProblemText(const AInfo: TLineEndingInfo): string;
+
+  function Counts: string;
+  begin
+    Result := '';
+    if AInfo.CrLf > 0 then
+      Result := Format('%d CRLF', [AInfo.CrLf]);
+    if AInfo.LfOnly > 0 then
+    begin
+      if Result <> '' then Result := Result + ', ';
+      Result := Result + Format('%d LF', [AInfo.LfOnly]);
+    end;
+    if AInfo.CrOnly > 0 then
+    begin
+      if Result <> '' then Result := Result + ', ';
+      Result := Result + Format('%d CR', [AInfo.CrOnly]);
+    end;
+  end;
+
+begin
+  case AInfo.Kind of
+    lekMixed:
+      Result := Format('MIXED line endings (%s)', [Counts]);
+    lekLf:
+      Result := Format('LF only, no CR (%d line(s))', [AInfo.LfOnly]);
+    lekCr:
+      Result := Format('CR only, no LF (%d line(s))', [AInfo.CrOnly]);
+  else
+    Result := '';
+  end;
+end;
+
+function LineEndingCheckCandidate(const AFileName: string): Boolean;
+var
+  Ext: string;
+begin
+  Ext := LowerCase(ExtractFileExt(AFileName));
+  Result := (Ext = '.pas') or (Ext = '.inc') or (Ext = '.dpr') or
+            (Ext = '.dpk') or (Ext = '.inc');
+end;
+
+function LooksBinaryContent(const ABytes: TBytes): Boolean;
+var
+  N, I, Limit: Integer;
+  Utf16: Boolean;
+begin
+  N := Length(ABytes);
+  // A binary .dfm/.fmx starts with $FF followed by 'TPF0'. The extension
+  // gate should keep those out; this catches one saved under another name.
+  if (N >= 5) and (ABytes[0] = $FF) and (ABytes[1] = Ord('T')) and
+     (ABytes[2] = Ord('P')) and (ABytes[3] = Ord('F')) and
+     (ABytes[4] = Ord('0')) then
+    Exit(True);
+  // UTF-16 text is full of NUL bytes, so the NUL test only applies when no
+  // UTF-16 BOM says otherwise - CountLineEndings and ConvertFileToCrLf
+  // both read those files by code unit.
+  Utf16 := (N >= 2) and
+           (((ABytes[0] = $FF) and (ABytes[1] = $FE)) or
+            ((ABytes[0] = $FE) and (ABytes[1] = $FF)));
+  if Utf16 then Exit(False);
+  Limit := N;
+  if Limit > 4096 then Limit := 4096;
+  for I := 0 to Limit - 1 do
+    if ABytes[I] = 0 then Exit(True);
+  Result := False;
 end;
 
 // ---------------------------------------------------------------------------

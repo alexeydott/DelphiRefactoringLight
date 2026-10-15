@@ -1,6 +1,6 @@
 ﻿# Delphi Refactoring Light
 
-**Version 1.23.8** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
+**Version 1.24.0** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
 
 A design-time package for **Delphi 13** that connects to the built-in Delphi Language Server (`DelphiLSP.exe`) to provide a broad set of refactoring and code-analysis features directly in the editor:
 
@@ -431,6 +431,38 @@ UI:
 - **Section-aware `uses` editing**: the target section defaults to `interface` when the identifier is used above `implementation`, else `implementation`. If the unit is already listed under `implementation` but is now needed at `interface` level, it is **moved** (removed from the implementation clause, added to the interface clause &mdash; listing it in both would not compile); the reverse direction is a no-op since interface-level uses cover the implementation too. Clause rewriting handles single-line and one-unit-per-line layouts and preserves comments; clauses containing `{$IFDEF}`s are never rewritten (the action is refused rather than risking a mangled clause).
 - Candidate lists are deduplicated by unit name (third-party libraries often ship the same source in several directories); a project-scope hit wins over a library hit.
 - **Limitation:** shares the index limitations of *Find unit for identifier* (DCU-only units are unknown). The live check only reports identifiers with at least one known unit &mdash; everything else stays a plain compiler error.
+
+### Line endings at file open
+
+Delphi copes badly with source files that are not plain CRLF &mdash; and worst
+with files that mix CRLF, LF and CR, the usual result of a checkout without
+`core.autocrlf` or a half-finished conversion: breakpoints land on the wrong
+line and the editor miscounts positions. The plugin therefore looks at every
+source file the IDE **opens** (`.pas`, `.inc`, `.dpr`, `.dpk`) and reports
+what it found, with the counts: *"MIXED line endings (412 CRLF, 7 LF)"*.
+
+The warning offers four answers: correct it now, correct it and **always in
+this session**, correct it and **always** (saved in the options), or leave it.
+A file is reported once per session whatever the answer, and several files
+opened at once (a project load) are reported together in one dialog.
+
+The correction rewrites the line breaks **on disk** and makes the IDE re-read
+the file; the encoding is untouched (UTF-8 with or without BOM, ANSI, UTF-16),
+and only the breaks change. Three separate gates decide whether a file may be
+rewritten at all, because the conversion works on bytes: the **extension**
+(never `.dfm`/`.fmx` &mdash; a binary form file is bytes, and turning an `$0A`
+inside it into `$0D$0A` would destroy it), the **content** (a binary header or
+a NUL byte outside UTF-16), and the **location** (nothing below the RAD Studio
+installation &mdash; a shipped RTL/VCL source is not yours to convert).
+Read-only files are skipped, and a unit with **unsaved changes** is named
+instead of being rewritten: the fix is a disk write, and overwriting a file
+whose buffer has been edited would lose the edit.
+
+The check and the automatic correction are switched in *Tools &rarr; Options
+&rarr; Third Party &rarr; Refactoring Light &rarr; Line endings*; the status
+window row *"line endings at open"* says what the check is doing and what it
+has corrected in this session. Project-wide, the same problem is reported by
+the **Debug consistency** project check.
 
 ### Project checks (menu only)
 

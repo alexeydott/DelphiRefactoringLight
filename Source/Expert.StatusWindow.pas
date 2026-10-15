@@ -55,7 +55,7 @@ function StatusSnapshot: TArray<TStatusRow>;
 implementation
 
 uses
-  Expert.ResourceMonitor, Expert.CompletionWizard,
+  Expert.ResourceMonitor, Expert.CompletionWizard, Expert.LineEndingWatcher,
   System.SysUtils, System.Classes, System.IniFiles, System.IOUtils,
   Vcl.Forms, Vcl.Controls, Vcl.ComCtrls, Vcl.ExtCtrls, Vcl.Graphics,
   Vcl.ActnList, Vcl.ImgList, Vcl.Menus,
@@ -748,6 +748,14 @@ begin
       Format('last: %s - ToolsAPI and the editor buffers are main thread ' +
       'only; this is a DEFECT in the plugin, please report it',
       [LastOffMainThreadCall]), slBad);
+
+  // Line endings at file open: the check corrects files on disk, so what it
+  // did (and whether it is asking at all) must be readable somewhere - this
+  // is where one looks when a file was silently rewritten, or was not.
+  Row('line endings at open', LineEndingWatcherStatus,
+    'LF-only or mixed line endings are reported when the IDE opens a source ' +
+    'file; "Line endings" in the options page switches it and the automatic ' +
+    'correction');
 
   // ---- live quick-fix checker --------------------------------------------
   LiveStatusInfo(LiveFile, Analysing, Resolving, FromLsp, Fresh, FixCount);

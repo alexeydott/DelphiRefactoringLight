@@ -75,6 +75,7 @@
         <DCCReference Include="..\Source\Expert.WithScanner.pas"/>
         <DCCReference Include="..\Source\Expert.WithRewriter.pas"/>
         <DCCReference Include="..\Source\Expert.UnitIndex.pas"/>
+        <DCCReference Include="..\Source\Expert.DebugConsistency.pas"/>
         <DCCReference Include="..\Source\Expert.UsesEditor.pas"/>
         <DCCReference Include="..\Source\Expert.AutoImport.pas"/>
         <DCCReference Include="..\Source\Expert.VcsBlame.pas"/>
