@@ -31,7 +31,7 @@ unit Expert.DebugConsistency;
 interface
 
 uses
-  System.SysUtils, System.Generics.Collections;
+  System.SysUtils, System.Generics.Collections, Delphi.FileEncoding;
 
 type
   TDebugIssueSeverity = (dsInfo, dsWarning, dsProblem);
@@ -189,6 +189,48 @@ function LineEndingIssueId(const AFileName: string): string;
 function CollectLineEndingIssues(const AFiles: TArray<string>;
   const AReader: TLineEndingReader;
   const AProgress: TLineEndingProgress = nil): TArray<TLineEndingIssue>;
+
+type
+  /// <summary>One file an encoding conversion would touch.</summary>
+  TEncodingIssue = record
+    FileName: string;
+    Found: TSourceEncoding;
+    /// <summary>Stable over a re-scan - it names the PLACE, like the
+    ///  line-ending, DFM and GUID ids.</summary>
+    Id: string;
+  end;
+
+  TEncodingReader = reference to function(const AFile: string;
+    out ABytes: TBytes): Boolean;
+
+/// <summary>FNV-1a over the lower-cased path.</summary>
+function EncodingIssueId(const AFileName: string): string;
+
+/// <summary>Every file of AFiles whose encoding is in AFROM and which may
+///  be rewritten at all - the SAME two gates the line-ending check uses
+///  (LineEndingCheckCandidate, LooksBinaryContent), so a form file or
+///  anything binary is never a finding. A file that already IS ATo is
+///  skipped even when its class is in AFrom, and a duplicate in AFiles is
+///  reported once. AProgress may be nil.
+///  WHY FORM FILES STAY OUT, measured 2026-10-16 over 1381 of them: 1368
+///  are pure ASCII, i.e. a conversion would change nothing, and the rest
+///  the IDE re-streams itself on the next save - so excluding them costs
+///  nothing and removes the one case that could corrupt a binary
+///  form.</summary>
+function CollectEncodingIssues(const AFiles: TArray<string>;
+  AFrom: TSourceEncodings; ATo: TSourceEncoding;
+  const AReader: TEncodingReader;
+  const AProgress: TLineEndingProgress = nil): TArray<TEncodingIssue>;
+
+/// <summary>The rows an answer must carry, by id: every finding that was
+///  ACTED on, whatever AMax says, plus as many of the rest as fit. Shared
+///  by both project checks - a budget that drops the row the call asked
+///  about is the defect 1.25.1 found live.</summary>
+function SelectReportRows(const AIds, AActedIds: TArray<string>;
+  AMax: Integer): TArray<Integer>;
+
+/// <summary>Ids the caller named that no finding carries. Shared.</summary>
+function UnknownReportIds(const AIds, ANamed: TArray<string>): TArray<string>;
 
 /// <summary>Which findings an answer must carry, as indexes into AIssues:
 ///  every one that was ACTED on, whatever AMax says, plus as many of the
@@ -581,11 +623,10 @@ begin
   end;
 end;
 
-function SelectLineEndingRows(const AIssues: TArray<TLineEndingIssue>;
-  const AActedIds: TArray<string>; AMax: Integer): TArray<Integer>;
+function SelectReportRows(const AIds, AActedIds: TArray<string>;
+  AMax: Integer): TArray<Integer>;
 var
-  I: Integer;
-  Left: Integer;
+  I, Left: Integer;
 
   function Acted(const AId: string): Boolean;
   var
@@ -601,8 +642,8 @@ begin
   Left := AMax;
   // The order of the findings is kept - an acted row does not jump to the
   // front, it simply cannot be dropped.
-  for I := 0 to High(AIssues) do
-    if Acted(AIssues[I].Id) then
+  for I := 0 to High(AIds) do
+    if Acted(AIds[I]) then
       Result := Result + [I]
     else if Left > 0 then
     begin
@@ -611,25 +652,106 @@ begin
     end;
 end;
 
-function UnknownLineEndingIds(const AIssues: TArray<TLineEndingIssue>;
-  const AIds: TArray<string>): TArray<string>;
+function UnknownReportIds(const AIds, ANamed: TArray<string>): TArray<string>;
 var
-  Id: string;
-  Issue: TLineEndingIssue;
+  Name, Id: string;
   Known: Boolean;
 begin
   Result := nil;
-  for Id in AIds do
+  for Name in ANamed do
   begin
-    if Trim(Id) = '' then Continue;
+    if Trim(Name) = '' then Continue;
     Known := False;
-    for Issue in AIssues do
-      if SameText(Issue.Id, Id) then
+    for Id in AIds do
+      if SameText(Id, Name) then
       begin
         Known := True;
         Break;
       end;
-    if not Known then Result := Result + [Id];
+    if not Known then Result := Result + [Name];
+  end;
+end;
+
+// Both checks answer the same two questions about their own findings, so
+// they ask ONE implementation - only the record differs.
+function IdsOf(const AIssues: TArray<TLineEndingIssue>): TArray<string>; overload;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(AIssues));
+  for I := 0 to High(AIssues) do Result[I] := AIssues[I].Id;
+end;
+
+function IdsOf(const AIssues: TArray<TEncodingIssue>): TArray<string>; overload;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(AIssues));
+  for I := 0 to High(AIssues) do Result[I] := AIssues[I].Id;
+end;
+
+function SelectLineEndingRows(const AIssues: TArray<TLineEndingIssue>;
+  const AActedIds: TArray<string>; AMax: Integer): TArray<Integer>;
+begin
+  Result := SelectReportRows(IdsOf(AIssues), AActedIds, AMax);
+end;
+
+function UnknownLineEndingIds(const AIssues: TArray<TLineEndingIssue>;
+  const AIds: TArray<string>): TArray<string>;
+begin
+  Result := UnknownReportIds(IdsOf(AIssues), AIds);
+end;
+
+function EncodingIssueId(const AFileName: string): string;
+var
+  H: Cardinal;
+  B: Byte;
+begin
+  H := 2166136261;
+  for B in TEncoding.UTF8.GetBytes(LowerCase(AFileName)) do
+    H := (H xor B) * 16777619;
+  Result := IntToHex(H, 8);
+end;
+
+function CollectEncodingIssues(const AFiles: TArray<string>;
+  AFrom: TSourceEncodings; ATo: TSourceEncoding;
+  const AReader: TEncodingReader;
+  const AProgress: TLineEndingProgress): TArray<TEncodingIssue>;
+var
+  Seen: TDictionary<string, Boolean>;
+  Bytes: TBytes;
+  Issue: TEncodingIssue;
+  I: Integer;
+  Key: string;
+  Found: TSourceEncoding;
+begin
+  Result := nil;
+  if not Assigned(AReader) then Exit;
+  Seen := TDictionary<string, Boolean>.Create;
+  try
+    for I := 0 to High(AFiles) do
+    begin
+      if Assigned(AProgress) then
+        AProgress(I + 1, Length(AFiles), AFiles[I]);
+      Key := LowerCase(AFiles[I]);
+      if Seen.ContainsKey(Key) then Continue;
+      Seen.Add(Key, True);
+      // The same two gates the line-ending check uses: this rewrites
+      // BYTES, so a form file or anything binary is none of our business.
+      if not LineEndingCheckCandidate(AFiles[I]) then Continue;
+      if not AReader(AFiles[I], Bytes) then Continue;
+      if LooksBinaryContent(Bytes) then Continue;
+      Found := ClassifySourceEncoding(Bytes);
+      if Found = ATo then Continue;   // already there
+      if not (Found in AFrom) then Continue;
+      Issue := Default(TEncodingIssue);
+      Issue.FileName := AFiles[I];
+      Issue.Found := Found;
+      Issue.Id := EncodingIssueId(AFiles[I]);
+      Result := Result + [Issue];
+    end;
+  finally
+    Seen.Free;
   end;
 end;
 

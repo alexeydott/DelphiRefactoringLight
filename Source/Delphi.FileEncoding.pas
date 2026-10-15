@@ -13,6 +13,36 @@ uses
   System.SysUtils, System.Classes, System.IOUtils;
 
 type
+  /// <summary>What a source file IS, as far as a conversion cares. Finer
+  ///  than TEncoding on purpose: Detect answers UTF-8-without-preamble for
+  ///  pure ASCII AND for real UTF-8 with high bytes, and those are not the
+  ///  same question here - ASCII needs no conversion at all, while BOM-less
+  ///  UTF-8 is the one the COMPILER gets wrong.
+  ///  MEASURED (2026-10-16, dcc32 37.0, one literal compiled three ways):
+  ///  UTF-8 WITHOUT a BOM gave 71 114 195 182 115 115 101 - the two UTF-8
+  ///  bytes of the umlaut became TWO characters - while the same file with
+  ///  a BOM and an ANSI one both gave 71 114 246 115 115 101. So a BOM-less
+  ///  UTF-8 unit is read as ANSI and its text is silently corrupted; that
+  ///  is the defect this classification exists to find.</summary>
+  TSourceEncoding = (
+    secUnknown,     // not readable
+    secAscii,       // no byte >= 128 - every encoding agrees, nothing to do
+    secAnsi,        // high bytes, not valid UTF-8 -> the system code page
+    secUtf8NoBom,   // high bytes, valid UTF-8, no BOM -> the trap above
+    secUtf8Bom,
+    secUtf16);
+  TSourceEncodings = set of TSourceEncoding;
+
+/// <summary>What ABytes are. Pure ASCII is its own answer.</summary>
+function ClassifySourceEncoding(const ABytes: TBytes): TSourceEncoding;
+
+/// <summary>For a row, a message and a combo entry.</summary>
+function SourceEncodingText(AEncoding: TSourceEncoding): string;
+
+/// <summary>Why it matters, or '' when it does not.</summary>
+function SourceEncodingNote(AEncoding: TSourceEncoding): string;
+
+type
   /// <summary>Helpers for reading and writing Delphi source files with
   ///  automatic encoding detection. Grouped into a class to keep the unit's
   ///  public API free of global routines.</summary>
@@ -68,6 +98,65 @@ implementation
 uses
   Winapi.Windows;
 {$ENDIF}
+
+function ClassifySourceEncoding(const ABytes: TBytes): TSourceEncoding;
+var
+  I: Integer;
+  HasHigh: Boolean;
+begin
+  if Length(ABytes) >= 3 then
+    if (ABytes[0] = $EF) and (ABytes[1] = $BB) and (ABytes[2] = $BF) then
+      Exit(secUtf8Bom);
+  if Length(ABytes) >= 2 then
+    if ((ABytes[0] = $FF) and (ABytes[1] = $FE))
+      or ((ABytes[0] = $FE) and (ABytes[1] = $FF)) then Exit(secUtf16);
+  HasHigh := False;
+  for I := 0 to High(ABytes) do
+    if ABytes[I] >= $80 then
+    begin
+      HasHigh := True;
+      Break;
+    end;
+  // No high byte at all: ANSI, UTF-8 and ASCII are the same bytes, so
+  // there is nothing to convert - that is a verdict of its own and not
+  // "UTF-8 without BOM", which would make every plain unit a finding.
+  if not HasHigh then Exit(secAscii);
+  if TDelphiFileEncoding.IsValidUtf8(ABytes, 0, Length(ABytes)) then
+    Result := secUtf8NoBom
+  else
+    Result := secAnsi;
+end;
+
+function SourceEncodingText(AEncoding: TSourceEncoding): string;
+begin
+  case AEncoding of
+    secAscii: Result := 'ASCII only';
+    secAnsi: Result := 'ANSI (system code page)';
+    secUtf8NoBom: Result := 'UTF-8 WITHOUT BOM';
+    secUtf8Bom: Result := 'UTF-8 with BOM';
+    secUtf16: Result := 'UTF-16';
+  else
+    Result := 'unknown';
+  end;
+end;
+
+function SourceEncodingNote(AEncoding: TSourceEncoding): string;
+begin
+  case AEncoding of
+    secUtf8NoBom:
+      // Short enough for a list column - the render showed the long form
+      // cut off at "...as A...", which loses exactly the point.
+      Result := 'read as ANSI by the compiler - non-ASCII becomes two';
+    secAnsi:
+      Result := 'readable, but tied to the machine''s code page';
+    secUtf16:
+      Result := 'Delphi reads it, but few other tools do';
+    secAscii:
+      Result := 'nothing to convert - the bytes are the same in every encoding';
+  else
+    Result := '';
+  end;
+end;
 
 type
   TUTF8NoBOMEncoding = class(TUTF8Encoding)

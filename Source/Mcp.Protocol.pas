@@ -1088,6 +1088,13 @@ const
     '"replace_all":{"type":"boolean","description":"Also replace the other occurrences of the literal - the routine for local, the unit otherwise. Ignored without a literal."},' +
     ApplyProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
+    '{"name":"file_encoding","description":"Project sources whose ENCODING is not the one you want, and the conversion for them. The default pair is the one that fixes a real defect: a unit that is valid UTF-8 but carries NO BOM is read by the compiler as ANSI, so every non-ASCII character in it silently becomes two (measured). Pure ASCII is never a finding unless you ask for it - its bytes are the same in every encoding - and form files and anything binary are never touched. Every finding carries an id; apply=true with fix_ids rewrites exactly those files, keeping every character."' + ',"inputSchema":{"type":"object","properties":' +
+    '{"from":{"type":"array","items":{"type":"string"},"description":"Which encodings to convert: ansi, utf8_no_bom, ascii, utf16. Default: ansi + utf8_no_bom."},' +
+    '"to":{"type":"string","description":"utf8_bom (default), utf8_no_bom or ansi. A file whose text the target cannot hold is refused, never written with replacement characters."},' +
+    '"fix_ids":{"type":"array","items":{"type":"string"},"description":"Ids from a previous call - the files to convert. Required for apply."},' +
+    '"max":{"type":"integer","description":"Most rows to return (default 200)."},' +
+    ApplyProp + ',' + InstanceProp + '}}}' +
+    ',' +
     '{"name":"line_endings","description":"Every project source (and the files ' +
     'it includes) whose line breaks are not plain CRLF - LF only, CR only, or ' +
     'MIXED, which is the one Delphi handles worst (breakpoints land on the ' +

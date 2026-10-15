@@ -704,6 +704,24 @@ type
     [Test] procedure TheConstantToolDeclaresWhatItTakes;
   end;
 
+  /// <summary>Forum idea 2026-10-16: convert a project's sources from one
+  ///  encoding to another ("man wuerde angeben von wo nach wo"). The
+  ///  measurement that shaped it is in TSourceEncoding - a BOM-less UTF-8
+  ///  unit is read by the compiler as ANSI.</summary>
+  [TestFixture]
+  TFileEncodingCheckTests = class
+  private
+    FDir: string;
+    function WriteRawEnc(const AName: string; const ABytes: TBytes): string;
+  public
+    [Setup] procedure Setup;
+    [TearDown] procedure TearDown;
+    [Test] procedure WhatAFileISAndWhyItMatters;
+    [Test] procedure OnlyWhatWasAskedForAndMayBeRewritten;
+    [Test] procedure BothChecksShareOneRowRule;
+    [Test] procedure TheEncodingToolDeclaresWhatItTakes;
+  end;
+
   /// <summary>Forum report 2026-10-15: Delphi had been installed by an admin
   ///  account, so rsvars.bat and the registry name THAT account's Documents
   ///  folder as the common directory - and every build of a user without
@@ -5889,7 +5907,180 @@ begin
   Assert.IsTrue(Why.Contains('enter a value'), Why);
 end;
 
+{ TFileEncodingCheckTests }
+
+function TFileEncodingCheckTests.WriteRawEnc(const AName: string;
+  const ABytes: TBytes): string;
+begin
+  Result := TPath.Combine(FDir, AName);
+  TFile.WriteAllBytes(Result, ABytes);
+end;
+
+procedure TFileEncodingCheckTests.Setup;
+begin
+  FDir := TPath.Combine(TPath.GetTempPath, 'rl_enc_' + TGUID.NewGuid.ToString);
+  TDirectory.CreateDirectory(FDir);
+end;
+
+procedure TFileEncodingCheckTests.TearDown;
+begin
+  try
+    if TDirectory.Exists(FDir) then TDirectory.Delete(FDir, True);
+  except
+  end;
+end;
+
+procedure TFileEncodingCheckTests.WhatAFileISAndWhyItMatters;
+const
+  OE = #$00F6;   // LATIN SMALL LETTER O WITH DIAERESIS
+var
+  Utf8: TBytes;
+begin
+  // The measured case (2026-10-16, dcc32 37.0): the SAME literal compiled
+  // from a BOM-less UTF-8 file gave 71 114 195 182 115 115 101 - two
+  // characters where one belongs - while a BOM and an ANSI file both gave
+  // 71 114 246 115 115 101. So these two classes are not the same question.
+  Utf8 := TEncoding.UTF8.GetBytes('Gr' + OE + 'sse');
+  Assert.AreEqual(Integer(Ord(secUtf8NoBom)),
+    Integer(Ord(ClassifySourceEncoding(Utf8))),
+    'valid UTF-8 with high bytes and no BOM - the trap');
+  Assert.AreEqual(Integer(Ord(secUtf8Bom)),
+    Integer(Ord(ClassifySourceEncoding(TBytes.Create($EF, $BB, $BF) + Utf8))));
+  Assert.AreEqual(Integer(Ord(secAnsi)),
+    Integer(Ord(ClassifySourceEncoding(TBytes.Create(71, 114, $F6, 115)))),
+    'a lone high byte is not UTF-8');
+  Assert.AreEqual(Integer(Ord(secUtf16)),
+    Integer(Ord(ClassifySourceEncoding(TBytes.Create($FF, $FE, 71, 0)))));
+  // ASCII is its OWN answer: calling it "UTF-8 without BOM" would make
+  // every plain unit a finding, and converting it changes no byte.
+  Assert.AreEqual(Integer(Ord(secAscii)),
+    Integer(Ord(ClassifySourceEncoding(TEncoding.ASCII.GetBytes('unit U;')))));
+  Assert.AreEqual(Integer(Ord(secAscii)),
+    Integer(Ord(ClassifySourceEncoding(nil))), 'nothing is ASCII, not ANSI');
+  Assert.IsTrue(SourceEncodingNote(secUtf8NoBom).Contains('ANSI'),
+    'the note says what the compiler does: ' + SourceEncodingNote(secUtf8NoBom));
+end;
+
+procedure TFileEncodingCheckTests.OnlyWhatWasAskedForAndMayBeRewritten;
+const
+  OE = #$00F6;
+var
+  Issues: TArray<TEncodingIssue>;
+  Files: TArray<string>;
+  Reader: TEncodingReader;
+
+  function Add(const AName: string; const ABytes: TBytes): string;
+  begin
+    Result := WriteRawEnc(AName, ABytes);
+    Files := Files + [Result];
+  end;
+
+  function Found(const AFile: string): Boolean;
+  begin
+    Result := False;
+    for var Issue in Issues do
+      if SameText(Issue.FileName, AFile) then Exit(True);
+  end;
+
+begin
+  Files := nil;
+  var U8 := TEncoding.UTF8.GetBytes('unit U; // Gr' + OE + 'sse');
+  var NoBom := Add('NoBom.pas', U8);
+  var WithBom := Add('WithBom.pas', TBytes.Create($EF, $BB, $BF) + U8);
+  var Ansi := Add('Ansi.pas', TBytes.Create(117, 110, 105, 116, 32, $F6, 59));
+  var Plain := Add('Plain.pas', TEncoding.ASCII.GetBytes('unit Plain;'));
+  // A form file is NEVER rewritten - measured 2026-10-16: 1368 of 1381 are
+  // pure ASCII anyway, so excluding them costs nothing.
+  var Dfm := Add('Form.dfm', TBytes.Create(111, 98, 106, $F6, 99, 116));
+  var Bin := Add('Binary.pas', TBytes.Create($FF, Ord('T'), Ord('P'), Ord('F'),
+    Ord('0'), 1, $F6, 2));
+  var Gone := TPath.Combine(FDir, 'NoSuchFile.pas');
+  Files := Files + [Gone, NoBom];   // and the same file twice
+
+  Reader :=
+    function(const AFile: string; out ABytes: TBytes): Boolean
+    begin
+      ABytes := nil;
+      if not TFile.Exists(AFile) then Exit(False);
+      ABytes := TFile.ReadAllBytes(AFile);
+      Result := True;
+    end;
+
+  // The default pair: what the compiler gets wrong, plus plain ANSI.
+  Issues := CollectEncodingIssues(Files, [secUtf8NoBom, secAnsi], secUtf8Bom,
+    Reader);
+  Assert.IsTrue(Found(NoBom), 'BOM-less UTF-8 is a finding');
+  Assert.IsTrue(Found(Ansi), 'and so is ANSI');
+  Assert.IsFalse(Found(WithBom), 'a file already in the target is not');
+  Assert.IsFalse(Found(Plain), 'and pure ASCII was not asked for');
+  Assert.IsFalse(Found(Dfm), 'a form file is NEVER rewritten');
+  Assert.IsFalse(Found(Bin), 'and neither is anything binary');
+  Assert.IsFalse(Found(Gone), 'a file that is not there is no finding');
+  Assert.AreEqual(2, Integer(Length(Issues)),
+    'two findings, and the duplicate is listed once');
+
+  // "von wo nach wo" is the whole point: ask for ANSI only and the
+  // BOM-less file stays untouched.
+  Issues := CollectEncodingIssues(Files, [secAnsi], secUtf8Bom, Reader);
+  Assert.AreEqual(1, Integer(Length(Issues)));
+  Assert.IsTrue(Found(Ansi));
+  // ...and ASCII is reachable, but only when it is named.
+  Issues := CollectEncodingIssues(Files, [secAscii], secUtf8Bom, Reader);
+  Assert.IsTrue(Found(Plain), 'asked for, so offered');
+
+  // The ids name the place.
+  Assert.AreEqual(EncodingIssueId(Plain), EncodingIssueId(UpperCase(Plain)),
+    'the case of the path does not change the id');
+  Assert.AreNotEqual(EncodingIssueId(Plain), EncodingIssueId(Ansi));
+end;
+
+procedure TFileEncodingCheckTests.BothChecksShareOneRowRule;
+var
+  Ids: TArray<string>;
+
+  function Picked(const ARows: TArray<Integer>): string;
+  begin
+    Result := '';
+    for var R in ARows do Result := Result + Ids[R] + ' ';
+  end;
+
+begin
+  Ids := ['A', 'B', 'C', 'D'];
+  // The acted row is the LAST one, so a "first N" rule would drop exactly
+  // it - which is what the line-ending tool did live (1.25.1).
+  Assert.AreEqual('A B C D ', Picked(SelectReportRows(Ids, ['D'], 3)),
+    'what was acted on survives the budget, and costs no other row');
+  Assert.AreEqual('B ', Picked(SelectReportRows(Ids, ['b'], 0)),
+    'budget 0 means counts plus what you just changed, case-insensitively');
+  Assert.AreEqual('', Picked(SelectReportRows(Ids, nil, 0)));
+  Assert.AreEqual('A B ', Picked(SelectReportRows(Ids, nil, 2)),
+    'and a plain listing is still the first N');
+  var Unknown := UnknownReportIds(Ids, ['A', 'ZZZZ', '']);
+  Assert.AreEqual(1, Integer(Length(Unknown)));
+  Assert.AreEqual('ZZZZ', Unknown[0], 'an id nothing carries is named');
+end;
+
+procedure TFileEncodingCheckTests.TheEncodingToolDeclaresWhatItTakes;
+var
+  Args: TArray<string>;
+
+  function Declares(const AName: string): Boolean;
+  begin
+    Result := False;
+    for var A in Args do
+      if SameText(A, AName) then Exit(True);
+  end;
+
+begin
+  Args := KnownToolArguments('file_encoding');
+  Assert.IsTrue(Length(Args) > 0, 'the tool is in the shipped definitions');
+  for var Needed in ['from', 'to', 'fix_ids', 'max', 'apply'] do
+    Assert.IsTrue(Declares(Needed), Needed + ' is declared');
+  Assert.IsFalse(Declares('files'), 'and nothing it does not read');
+end;
+
 { TInstallOutputRootTests }
+
 
 procedure TInstallOutputRootTests.ABuildNeverWritesWhereItMayNot;
 const
@@ -6289,6 +6480,7 @@ initialization
   TDUnitX.RegisterTestFixture(TLineEndingCheckTests);
   TDUnitX.RegisterTestFixture(TInstallOutputRootTests);
   TDUnitX.RegisterTestFixture(TDeclareConstantTests);
+  TDUnitX.RegisterTestFixture(TFileEncodingCheckTests);
   TDUnitX.RegisterTestFixture(TCheckScopeTests);
   TDUnitX.RegisterTestFixture(TExtractAndCompletionTests);
 

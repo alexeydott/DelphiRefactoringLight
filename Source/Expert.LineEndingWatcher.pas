@@ -61,6 +61,11 @@ function LineEndingFixAlwaysThisSession: Boolean;
 ///  THREAD (it asks the IDE about the module and reloads it).</summary>
 function FixLineEndingsOf(const AFileName: string; out AWhy: string): Boolean;
 
+/// <summary>Does the IDE hold unsaved changes for this file? Exported
+///  because every writer that rewrites the FILE (line endings, encoding)
+///  has to ask the same question before it does.</summary>
+function ModuleIsModified(const AFileName: string): Boolean;
+
 implementation
 
 uses

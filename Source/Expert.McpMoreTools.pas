@@ -35,7 +35,7 @@ uses
   Expert.UnitAvailability, Expert.UsesEditor, Expert.UsesCleanup,
   Expert.ImplementationFinder, Expert.FindReferencesDialog, Expert.ScopeFiles,
   Expert.UsesGraph, Expert.DebugConsistency, Expert.DebugConsistencyDialog,
-  Expert.LineEndingDialog, Expert.LineEndingWatcher,
+  Expert.LineEndingDialog, Expert.FileEncodingCheck, Expert.LineEndingWatcher,
   Expert.VcsBlame, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
   Expert.PluginSettings, Expert.IncludeExpansion, Expert.InterfaceLinks,
   Expert.SemanticReplace, Expert.SemanticReplaceWizard, Expert.MoveToUnit, Expert.SafeDelete,
@@ -2947,6 +2947,157 @@ begin
       ' on line ' + IntToStr(Plan.Line + 1);
 end;
 
+function EncodingFromName(const AName: string;
+  out AValue: TSourceEncoding): Boolean;
+var
+  N: string;
+begin
+  N := LowerCase(Trim(AName)).Replace('-', '_').Replace(' ', '_');
+  Result := True;
+  if (N = 'ansi') then AValue := secAnsi
+  else if (N = 'utf8_no_bom') or (N = 'utf8nobom') then AValue := secUtf8NoBom
+  else if (N = 'utf8_bom') or (N = 'utf8') then AValue := secUtf8Bom
+  else if (N = 'ascii') then AValue := secAscii
+  else if (N = 'utf16') then AValue := secUtf16
+  else
+  begin
+    AValue := secUnknown;
+    Result := False;
+  end;
+end;
+
+function ToolFileEncoding(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Files, WantIds: TArray<string>;
+  Issues: TArray<TEncodingIssue>;
+  Err, Msg: string;
+  DoApply: Boolean;
+  From: TSourceEncodings;
+  Target, E: TSourceEncoding;
+begin
+  DoApply := ArgBool(AArgs, 'apply');
+  var Max := ArgInt(AArgs, 'max', 200);
+  WantIds := nil;
+  var IdArr := AArgs.GetValue<TJSONArray>('fix_ids', nil);
+  if IdArr <> nil then
+    for var V in IdArr do WantIds := WantIds + [UpperCase(Trim(V.Value))];
+  if DoApply and (Length(WantIds) = 0) then
+    Exit(McpErr('apply needs "fix_ids" - list the files first and name the ' +
+      'ones to convert. Rewriting every file nobody looked at is not what ' +
+      'apply should mean.'));
+
+  // Default: the pair that fixes a real defect rather than a preference.
+  From := [];
+  var FromArr := AArgs.GetValue<TJSONArray>('from', nil);
+  if FromArr <> nil then
+    for var V in FromArr do
+    begin
+      if not EncodingFromName(V.Value, E) then
+        Exit(McpErr('unknown encoding in "from": ' + V.Value +
+          ' (ansi, utf8_no_bom, utf8_bom, ascii, utf16)'));
+      Include(From, E);
+    end;
+  if From = [] then From := [secUtf8NoBom, secAnsi];
+  Target := secUtf8Bom;
+  if ArgStr(AArgs, 'to') <> '' then
+    if not EncodingFromName(ArgStr(AArgs, 'to'), Target) then
+      Exit(McpErr('unknown encoding in "to": ' + ArgStr(AArgs, 'to')));
+  if not (Target in [secUtf8Bom, secUtf8NoBom, secAnsi]) then
+    Exit(McpErr('nothing can be converted to ' + SourceEncodingText(Target)));
+
+  Msg := '';
+  Issues := nil;
+  Files := nil;
+  if not McpRunOnMain(
+    procedure
+    begin
+      Files := GatherEncodingCheckFiles;
+      if Length(Files) > 0 then
+        Issues := CollectEncodingIssues(Files, From, Target, ReadEncodingBytes);
+    end, False, AStop, Err) then Exit(McpErr(Err));
+  if Length(Files) = 0 then Exit(McpErr('no project loaded / no source files'));
+
+  var Applied := TDictionary<string, string>.Create;
+  try
+    var ActedIds: TArray<string> := nil;
+    var Converted := 0;
+    var Failed := 0;
+    if DoApply then
+      for var Issue in Issues do
+      begin
+        var Wanted := False;
+        for var W in WantIds do
+          if W = UpperCase(Issue.Id) then Wanted := True;
+        if not Wanted then Continue;
+        var Outcome := '';
+        var Fn := Issue.FileName;
+        var Tgt := Target;
+        // The SAME conversion the dialog and the warning use, on the main
+        // thread (it reloads the module).
+        if not McpRunOnMain(
+          procedure
+          var
+            Why: string;
+          begin
+            if ConvertFileEncodingOf(Fn, Tgt, Why) then
+              Outcome := 'converted to ' + SourceEncodingText(Tgt)
+            else Outcome := 'NOT converted: ' + Why;
+          end, True, AStop, Err) then Outcome := 'NOT converted: ' + Err;
+        Applied.AddOrSetValue(UpperCase(Issue.Id), Outcome);
+        ActedIds := ActedIds + [Issue.Id];
+        if Outcome.StartsWith('converted') then Inc(Converted) else Inc(Failed);
+      end;
+
+    // A row that was acted on is always carried, whatever "max" says - it
+    // is what the call asked about (the defect 1.25.1 found live).
+    var Ids: TArray<string> := nil;
+    for var Issue in Issues do Ids := Ids + [Issue.Id];
+    var Arr := TJSONArray.Create;
+    var Rows := SelectReportRows(Ids, ActedIds, Max);
+    for var Idx in Rows do
+    begin
+      var Issue := Issues[Idx];
+      var O := TJSONObject.Create;
+      O.AddPair('id', Issue.Id);
+      O.AddPair('file', Issue.FileName);
+      O.AddPair('found', SourceEncodingText(Issue.Found));
+      if SourceEncodingNote(Issue.Found) <> '' then
+        O.AddPair('why', SourceEncodingNote(Issue.Found));
+      var Outcome := '';
+      if Applied.TryGetValue(UpperCase(Issue.Id), Outcome) then
+        O.AddPair('result', Outcome);
+      Arr.Add(O);
+    end;
+
+    var Res := TJSONObject.Create;
+    Res.AddPair('applied', TJSONBool.Create(DoApply));
+    Res.AddPair('target', SourceEncodingText(Target));
+    Res.AddPair('filesChecked', TJSONNumber.Create(Length(Files)));
+    Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
+    Res.AddPair('listed', TJSONNumber.Create(Length(Rows)));
+    Res.AddPair('files', Arr);
+    if DoApply then
+    begin
+      Res.AddPair('converted', TJSONNumber.Create(Converted));
+      if Failed > 0 then
+        Res.AddPair('notConverted', TJSONNumber.Create(Failed));
+      var Unknown := UnknownReportIds(Ids, WantIds);
+      if Length(Unknown) > 0 then
+        Res.AddPair('unknownIds', string.Join(', ', Unknown) +
+          ' - no finding of this scan carries that id, so nothing was done ' +
+          'for it (already in the target encoding, not a file this check ' +
+          'rewrites, or an id from an older scan - list again)');
+      Res.AddPair('note', Format('%d file(s) converted to %s, every character ' +
+        'kept. "total" and the rows describe the scan taken BEFORE the ' +
+        'conversion - list again for the state now.',
+        [Converted, SourceEncodingText(Target)]));
+    end;
+    Result := McpOk(Res);
+  finally
+    Applied.Free;
+  end;
+end;
+
 function ToolLineEndings(AArgs: TJSONObject; AStop: THandle): string;
 var
   Files, WantIds: TArray<string>;
@@ -3580,6 +3731,7 @@ initialization
   RegisterMcpTool('signature_check', ToolSignatureCheck);
   RegisterMcpTool('interface_guids', ToolInterfaceGuids);
   RegisterMcpTool('line_endings', ToolLineEndings);
+  RegisterMcpTool('file_encoding', ToolFileEncoding);
   RegisterMcpTool('dfm_events', ToolDfmEvents);
   RegisterMcpTool('find_unit_references', ToolFindUnitReferences);
   RegisterMcpTool('find_original_symbol', ToolFindOriginalSymbol);

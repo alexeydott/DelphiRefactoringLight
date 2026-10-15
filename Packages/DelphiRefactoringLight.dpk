@@ -74,6 +74,7 @@ contains
   Expert.LspPrewarmer in '..\Source\Expert.LspPrewarmer.pas',
   Expert.LineEndingWatcher in '..\Source\Expert.LineEndingWatcher.pas',
   Expert.LineEndingDialog in '..\Source\Expert.LineEndingDialog.pas',
+  Expert.FileEncodingCheck in '..\Source\Expert.FileEncodingCheck.pas',
   Expert.IdentifierCheck in '..\Source\Expert.IdentifierCheck.pas',
   Expert.SignatureCheck in '..\Source\Expert.SignatureCheck.pas',
   Expert.SignatureCheckDialog in '..\Source\Expert.SignatureCheckDialog.pas',
