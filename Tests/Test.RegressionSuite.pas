@@ -650,6 +650,14 @@ type
     ///  before the dialog even opened, so a cancelled question silenced it
     ///  for the whole session.</summary>
     [Test] procedure CancelDecidesNothingAndLeaveItDoes;
+    /// <summary>The project check (user request, 2026-10-15: "einen
+    ///  Project check analog zum dfm Check"): which files it reports, which
+    ///  it must never report, and that every finding carries a stable id -
+    ///  an apply names ids, never list positions.</summary>
+    [Test] procedure TheProjectCheckReportsOnlyWhatItMayRewrite;
+    /// <summary>...and the tool declares what it reads. An argument the
+    ///  schema does not list is dropped silently (1.16.11).</summary>
+    [Test] procedure TheLineEndingToolDeclaresWhatItTakes;
   end;
 
   [TestFixture]
@@ -5268,6 +5276,104 @@ begin
   Assert.IsTrue(LineEndingChoiceOfIndex(3, True) = lecLeave, 'option 4');
   Assert.IsTrue(LineEndingChoiceOfIndex(9, True) = lecCancel,
     'an answer we did not offer changes nothing');
+end;
+
+procedure TLineEndingCheckTests.TheProjectCheckReportsOnlyWhatItMayRewrite;
+var
+  Issues: TArray<TLineEndingIssue>;
+  Files: TArray<string>;
+  Reader: TLineEndingReader;
+
+  function Add(const AName: string; const ABytes: TBytes): string;
+  begin
+    Result := WriteRaw(AName, ABytes);
+    Files := Files + [Result];
+  end;
+
+  function Utf8(const AText: string): TBytes;
+  begin
+    Result := TEncoding.UTF8.GetBytes(AText);
+  end;
+
+  function Found(const AFile: string): Boolean;
+  begin
+    Result := False;
+    for var Issue in Issues do
+      if SameText(Issue.FileName, AFile) then Exit(True);
+  end;
+
+begin
+  Files := nil;
+  var Clean := Add('Clean.pas', Utf8('unit Clean;'#13#10'end.'#13#10));
+  var Lf := Add('Lf.pas', Utf8('unit Lf;'#10'end.'#10));
+  var Mixed := Add('Mixed.pas', Utf8('a'#13#10'b'#10'c'#13#10));
+  var Inc_ := Add('Part.inc', Utf8('const X = 1;'#10));
+  // A TEXT .dfm with LF endings - still none of our business, because the
+  // gate cannot tell it from a binary one by name alone.
+  var Dfm := Add('Form.dfm', Utf8('object Form1: TForm1'#10'end'#10));
+  // A binary form that somebody saved under a source name: the second gate.
+  var Bin := Add('Binary.pas', TBytes.Create($FF, Ord('T'), Ord('P'), Ord('F'),
+    Ord('0'), 1, 10, 2, 10));
+  var Gone := TPath.Combine(FDir, 'NoSuchFile.pas');
+  Files := Files + [Gone];
+  // The same file twice - a project list plus its include files can name
+  // one file twice, and one row per file is what the dialog shows.
+  Files := Files + [Lf];
+
+  Reader :=
+    function(const AFile: string; out ABytes: TBytes): Boolean
+    begin
+      ABytes := nil;
+      if not TFile.Exists(AFile) then Exit(False);
+      ABytes := TFile.ReadAllBytes(AFile);
+      Result := True;
+    end;
+  Issues := CollectLineEndingIssues(Files, Reader);
+
+  Assert.IsTrue(Found(Lf), 'an LF-only unit is a finding');
+  Assert.IsTrue(Found(Mixed), 'a mixed unit is a finding');
+  Assert.IsTrue(Found(Inc_), 'an include file counts too');
+  Assert.IsFalse(Found(Clean), 'a CRLF unit is not');
+  Assert.IsFalse(Found(Dfm), 'a form file is NEVER rewritten');
+  Assert.IsFalse(Found(Bin), 'and neither is anything binary');
+  Assert.IsFalse(Found(Gone), 'a file that is not there is no finding');
+  Assert.AreEqual(3, Integer(Length(Issues)),
+    'three findings, and the duplicate is listed once');
+
+  // The id names the PLACE, so it survives a re-scan that reorders the
+  // list - that is what an apply addresses.
+  Assert.AreEqual(LineEndingIssueId(Lf), LineEndingIssueId(Lf),
+    'the same file, the same id');
+  Assert.AreEqual(LineEndingIssueId(Lf), LineEndingIssueId(UpperCase(Lf)),
+    'and the case of the path does not change it');
+  Assert.AreNotEqual(LineEndingIssueId(Lf), LineEndingIssueId(Mixed),
+    'two files, two ids');
+  for var Issue in Issues do
+    Assert.AreEqual(LineEndingIssueId(Issue.FileName), Issue.Id,
+      'the issue carries its own id');
+end;
+
+procedure TLineEndingCheckTests.TheLineEndingToolDeclaresWhatItTakes;
+var
+  Args: TArray<string>;
+
+  function Declares(const AName: string): Boolean;
+  begin
+    Result := False;
+    for var A in Args do
+      if SameText(A, AName) then Exit(True);
+  end;
+
+begin
+  Args := KnownToolArguments('line_endings');
+  Assert.IsTrue(Length(Args) > 0, 'the tool is in the shipped definitions');
+  // The handler reads these two, so the schema must name them - an
+  // argument the schema does not list is dropped before the handler ever
+  // sees it, and the caller is told nothing (1.16.11).
+  Assert.IsTrue(Declares('apply'), 'apply is declared');
+  Assert.IsTrue(Declares('fix_ids'), 'fix_ids is declared');
+  Assert.IsTrue(Declares('max'), 'max is declared');
+  Assert.IsFalse(Declares('files'), 'and nothing it does not read');
 end;
 
 { TCheckScopeTests }

@@ -1,6 +1,6 @@
 ﻿# Delphi Refactoring Light
 
-**Version 1.24.2** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
+**Version 1.25.0** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
 
 A design-time package for **Delphi 13** that connects to the built-in Delphi Language Server (`DelphiLSP.exe`) to provide a broad set of refactoring and code-analysis features directly in the editor:
 
@@ -461,18 +461,28 @@ whose buffer has been edited would lose the edit.
 The check and the automatic correction are switched in *Tools &rarr; Options
 &rarr; Third Party &rarr; Refactoring Light &rarr; Line endings*; the status
 window row *"line endings at open"* says what the check is doing and what it
-has corrected in this session. Project-wide, the same problem is reported by
-the **Debug consistency** project check.
+has corrected in this session. For the whole project at once there is the
+**Line endings** project check below.
 
 ### Project checks (menu only)
 
-Three checks for problems the compiler does **not** catch, reachable via *Refactoring Light &rarr; Project checks*. Each opens a results dialog; double-click / **Go to** jumps to the offending location.
+Five checks for problems the compiler does **not** catch, reachable via *Refactoring Light &rarr; Project checks*. Each opens a results dialog; double-click / **Go to** jumps to the offending location.
 
 - **DFM event handlers** &mdash; scans every form's `.dfm` for `OnXxx = Handler` references and flags two failure modes the compiler ignores (the `.dfm` binds handlers *by name*):
   - **Missing handler** &mdash; the referenced method does not exist &rarr; the form crashes with *"Method not found"* on load.
   - **Signature mismatch** &mdash; the handler's parameter list deviates from the event type &rarr; stack corruption when the event fires. The expected signature is resolved from the component's **actual source** on the search / browsing path (version-correct, no hard-coded tables), and compiler **directives inside parameter lists** (`var NodeHeight: {$if CompilerVersion >= 36.0}TDimension{$else}Integer{$ifend}`) are resolved to their active branch before comparing, so IFDEF'd signatures are not falsely flagged. `//` comments inside multi-line signatures are stripped as well.
   - The Details column **bold-highlights** the differing parameter types; interchangeable integer aliases (`Integer` / `LongInt` / ...) can optionally be ignored. An **"Auto-fix"** column marks rows the plugin can correct itself: checking them and pressing *Fix checked signatures* rewrites **both** the class declaration and the implementation header (anchored by name, not line number, so fixing several handlers in one file stays correct), **keeps the handler's own parameter names** (only types / modifiers are corrected), and adds any newly-required unit to the `uses` clause &mdash; the declaring unit of each parameter type is resolved via LSP `GotoDefinition` and cached across the batch. Files are written straight to disk when not open in the IDE (so a large batch does not flood the editor with tabs); an optional *Apply via IDE (open form + save)* mode re-streams the DFM instead.
 - **Interface GUIDs** &mdash; lists every `interface` / `dispinterface` and its GUID; duplicates are shown in red on top. A GUID shared by a matching `interface` **and** `dispinterface` pair is not counted as a duplicate.
+- **Line endings** &mdash; every project source (and the files it `{$I}`ncludes)
+  whose line breaks are not plain CRLF, with the counts per file and the three
+  kinds separated: **MIXED** (shown bold &mdash; the case Delphi handles worst),
+  LF only, CR only. Rows are ticked by default and *Correct checked (CRLF)*
+  rewrites them in one go, keeping each file's encoding and changing nothing
+  but the breaks; a file that is open with **unsaved changes** is skipped and
+  named rather than overwritten. Form files and anything binary are never
+  listed &mdash; the correction works on bytes. The same check runs on a single
+  file when the IDE opens it (see *Line endings at file open* above), and both
+  share one implementation, so neither can rewrite what the other refuses.
 - **Circular unit references** &mdash; a Tarjan strongly-connected-components analysis over the project's `uses` graph. Tabs for the cycle groups, the shortest / longest cycle lengths (how many units a cycle spans), the individual **edge levers** (ranked by how many units would leave the cyclic set if that one `uses` entry were removed), the complete list of simple cycles, and the **hotspots** (which unit appears in the most cycles, and via which `uses` entry). Double-click jumps to the exact `uses` entry.
 
 ## Standalone executable

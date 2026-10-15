@@ -160,6 +160,37 @@ function LineEndingChoiceOfIndex(AIndex: Integer;
   AConfirmed: Boolean): TLineEndingChoice;
 
 type
+  /// <summary>One finding of the project-wide line-ending check.</summary>
+  TLineEndingIssue = record
+    FileName: string;
+    Info: TLineEndingInfo;
+    /// <summary>Stable over a re-scan, because it names the PLACE and not
+    ///  a position in the list - the same reason the DFM check and the
+    ///  GUID check carry one. An apply names ids, never indexes.</summary>
+    Id: string;
+  end;
+
+  /// <summary>Reads a file's raw bytes. Returns False when it cannot be
+  ///  read at all (then the file is simply not a finding).</summary>
+  TLineEndingReader = reference to function(const AFile: string;
+    out ABytes: TBytes): Boolean;
+
+  TLineEndingProgress = reference to procedure(ACurrent, ATotal: Integer;
+    const AFile: string);
+
+/// <summary>FNV-1a over the file's path, lower case - the same shape the
+///  other checks' ids have.</summary>
+function LineEndingIssueId(const AFileName: string): string;
+
+/// <summary>Every file of AFiles that Delphi would stumble over: not pure
+///  CRLF, and allowed to be rewritten at all (LineEndingCheckCandidate +
+///  LooksBinaryContent). Duplicates in AFiles are reported once. AProgress
+///  may be nil.</summary>
+function CollectLineEndingIssues(const AFiles: TArray<string>;
+  const AReader: TLineEndingReader;
+  const AProgress: TLineEndingProgress = nil): TArray<TLineEndingIssue>;
+
+type
   TSourceDirective = record
     Line: Integer;       // 1-based
     Text: string;        // e.g. '{$D-}'
@@ -480,6 +511,57 @@ begin
     3: Result := lecLeave;
   else
     Result := lecCancel;   // an answer we did not offer changes nothing
+  end;
+end;
+
+function LineEndingIssueId(const AFileName: string): string;
+var
+  H: Cardinal;
+  B: Byte;
+  Key: string;
+begin
+  Key := LowerCase(AFileName);
+  H := 2166136261;
+  for B in TEncoding.UTF8.GetBytes(Key) do
+    H := (H xor B) * 16777619;
+  Result := IntToHex(H, 8);
+end;
+
+function CollectLineEndingIssues(const AFiles: TArray<string>;
+  const AReader: TLineEndingReader;
+  const AProgress: TLineEndingProgress): TArray<TLineEndingIssue>;
+var
+  Seen: TDictionary<string, Boolean>;
+  Bytes: TBytes;
+  Issue: TLineEndingIssue;
+  I: Integer;
+  Key: string;
+begin
+  Result := nil;
+  if not Assigned(AReader) then Exit;
+  Seen := TDictionary<string, Boolean>.Create;
+  try
+    for I := 0 to High(AFiles) do
+    begin
+      if Assigned(AProgress) then
+        AProgress(I + 1, Length(AFiles), AFiles[I]);
+      Key := LowerCase(AFiles[I]);
+      if Seen.ContainsKey(Key) then Continue;
+      Seen.Add(Key, True);
+      // The same two gates the warning at file open uses: the fix rewrites
+      // BYTES, so a form file or anything binary is none of our business.
+      if not LineEndingCheckCandidate(AFiles[I]) then Continue;
+      if not AReader(AFiles[I], Bytes) then Continue;
+      if LooksBinaryContent(Bytes) then Continue;
+      Issue := Default(TLineEndingIssue);
+      Issue.Info := ClassifyLineEndings(Bytes);
+      if not Issue.Info.NeedsFix then Continue;
+      Issue.FileName := AFiles[I];
+      Issue.Id := LineEndingIssueId(AFiles[I]);
+      Result := Result + [Issue];
+    end;
+  finally
+    Seen.Free;
   end;
 end;
 

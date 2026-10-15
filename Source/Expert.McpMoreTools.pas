@@ -35,6 +35,7 @@ uses
   Expert.UnitAvailability, Expert.UsesEditor, Expert.UsesCleanup,
   Expert.ImplementationFinder, Expert.FindReferencesDialog, Expert.ScopeFiles,
   Expert.UsesGraph, Expert.DebugConsistency, Expert.DebugConsistencyDialog,
+  Expert.LineEndingDialog, Expert.LineEndingWatcher,
   Expert.VcsBlame, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
   Expert.PluginSettings, Expert.IncludeExpansion, Expert.InterfaceLinks,
   Expert.SemanticReplace, Expert.SemanticReplaceWizard, Expert.MoveToUnit, Expert.SafeDelete,
@@ -2841,6 +2842,101 @@ begin
       ' on line ' + IntToStr(Plan.Line + 1);
 end;
 
+function ToolLineEndings(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Files, WantIds: TArray<string>;
+  Issues: TArray<TLineEndingIssue>;
+  Err: string;
+  DoApply: Boolean;
+begin
+  DoApply := ArgBool(AArgs, 'apply');
+  var Max := ArgInt(AArgs, 'max', 200);
+  WantIds := nil;
+  var IdArr := AArgs.GetValue<TJSONArray>('fix_ids', nil);
+  if IdArr <> nil then
+    for var V in IdArr do WantIds := WantIds + [UpperCase(Trim(V.Value))];
+  // Same contract as the other two checks that write: nothing is corrected
+  // without ids. Here it is not a decision the tool must not make - it is
+  // that rewriting every line break of a file somebody did not look at is
+  // not what "apply" should mean.
+  if DoApply and (Length(WantIds) = 0) then
+    Exit(McpErr('apply needs "fix_ids" - list the files first and name the ' +
+      'ones to rewrite as CRLF.'));
+
+  // The scan reads editor buffers (ReadLineEndingBytes) and the file list
+  // comes from the project, so both belong on the main thread.
+  Issues := nil;
+  Files := nil;
+  if not McpRunOnMain(
+    procedure
+    begin
+      Files := GatherLineEndingCheckFiles;
+      if Length(Files) > 0 then
+        Issues := CollectLineEndingIssues(Files, ReadLineEndingBytes);
+    end, False, AStop, Err) then Exit(McpErr(Err));
+  if Length(Files) = 0 then Exit(McpErr('no project loaded / no source files'));
+
+  var Applied := TDictionary<string, string>.Create;
+  try
+    if DoApply then
+      for var Issue in Issues do
+      begin
+        var Wanted := False;
+        for var W in WantIds do
+          if W = UpperCase(Issue.Id) then Wanted := True;
+        if not Wanted then Continue;
+        var Outcome := '';
+        var Fn := Issue.FileName;
+        // The SAME fix the warning and the dialog use, on the main thread
+        // (it reloads the module).
+        if not McpRunOnMain(
+          procedure
+          var
+            Why: string;
+          begin
+            if FixLineEndingsOf(Fn, Why) then Outcome := 'corrected (CRLF)'
+            else Outcome := 'NOT corrected: ' + Why;
+          end, True, AStop, Err) then Outcome := 'NOT corrected: ' + Err;
+        Applied.AddOrSetValue(UpperCase(Issue.Id), Outcome);
+      end;
+
+    var Arr := TJSONArray.Create;
+    var Mixed := 0;
+    var Shown := 0;
+    for var Issue in Issues do
+    begin
+      if Issue.Info.Kind = lekMixed then Inc(Mixed);
+      if Shown >= Max then Continue;
+      Inc(Shown);
+      var O := TJSONObject.Create;
+      O.AddPair('id', Issue.Id);
+      O.AddPair('file', Issue.FileName);
+      O.AddPair('problem', LineEndingProblemText(Issue.Info));
+      O.AddPair('crlf', TJSONNumber.Create(Issue.Info.CrLf));
+      O.AddPair('lf', TJSONNumber.Create(Issue.Info.LfOnly));
+      O.AddPair('cr', TJSONNumber.Create(Issue.Info.CrOnly));
+      var Outcome := '';
+      if Applied.TryGetValue(UpperCase(Issue.Id), Outcome) then
+        O.AddPair('result', Outcome);
+      Arr.Add(O);
+    end;
+    var Res := TJSONObject.Create;
+    Res.AddPair('applied', TJSONBool.Create(DoApply));
+    Res.AddPair('filesChecked', TJSONNumber.Create(Length(Files)));
+    Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
+    Res.AddPair('listed', TJSONNumber.Create(Shown));
+    Res.AddPair('mixed', TJSONNumber.Create(Mixed));
+    Res.AddPair('files', Arr);
+    if DoApply then
+      Res.AddPair('note', 'The files you named are CRLF now; their encoding ' +
+        'is unchanged and nothing but the line breaks moved. A file the IDE ' +
+        'had open was reloaded.');
+    Result := McpOk(Res);
+  finally
+    Applied.Free;
+  end;
+end;
+
 function ToolInterfaceGuids(AArgs: TJSONObject; AStop: THandle): string;
 var
   Entries: TArray<TInterfaceGuidEntry>;
@@ -3353,6 +3449,7 @@ initialization
   RegisterMcpTool('extract_interface', ToolExtractInterface);
   RegisterMcpTool('signature_check', ToolSignatureCheck);
   RegisterMcpTool('interface_guids', ToolInterfaceGuids);
+  RegisterMcpTool('line_endings', ToolLineEndings);
   RegisterMcpTool('dfm_events', ToolDfmEvents);
   RegisterMcpTool('find_unit_references', ToolFindUnitReferences);
   RegisterMcpTool('find_original_symbol', ToolFindOriginalSymbol);

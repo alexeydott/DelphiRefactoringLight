@@ -1074,6 +1074,19 @@ const
     'previous call - the declarations that get a new GUID. Required for apply."},' +
     ApplyProp + ',' + InstanceProp + '}}}' +
     ',' +
+    '{"name":"line_endings","description":"Every project source (and the files ' +
+    'it includes) whose line breaks are not plain CRLF - LF only, CR only, or ' +
+    'MIXED, which is the one Delphi handles worst (breakpoints land on the ' +
+    'wrong line). Form files and anything binary are never reported: the fix ' +
+    'rewrites bytes. Every finding carries an id; apply=true with fix_ids ' +
+    'rewrites exactly those files as CRLF, keeping the encoding and changing ' +
+    'nothing else. A file open with unsaved changes is skipped and named."' +
+    ',"inputSchema":{"type":"object","properties":' +
+    '{"fix_ids":{"type":"array","items":{"type":"string"},"description":"Ids ' +
+    'from a previous call - the files to rewrite. Required for apply."},' +
+    '"max":{"type":"integer","description":"Most rows to return (default 200)."},' +
+    ApplyProp + ',' + InstanceProp + '}}}' +
+    ',' +
     '{"name":"add_unit","description":"Adds a unit to the uses clause of a file (interface or i' +
     'mplementation), minimal edit, IDE buffer when the file is open. Refuses units only on the ' +
     'browsing path. apply=false (the default) only shows the change.","inputSchema":{"type":"object","properties":{"file":{"type":"string","desc' +

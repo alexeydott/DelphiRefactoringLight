@@ -165,6 +165,7 @@ type
     procedure OnCheckInterfaceGuids(Sender: TObject);
     procedure OnCheckCircularRefs(Sender: TObject);
     procedure OnCheckDebugConsistency(Sender: TObject);
+    procedure OnCheckLineEndings(Sender: TObject);
     procedure OnRetryTimer(Sender: TObject);
     procedure OnSyncTimer(Sender: TObject);
     procedure DoOnPopup(Sender: TObject);
@@ -228,7 +229,7 @@ uses
   Expert.MoveToUnitWizard, Expert.ExtractInterfaceWizard,
   Expert.SemanticReplaceWizard, Expert.DfmEventCheckDialog,
   Expert.InterfaceGuidDialog, Expert.CircularRefsDialog, Expert.StatusWindow,
-  Expert.DebugConsistencyDialog,
+  Expert.DebugConsistencyDialog, Expert.LineEndingDialog,
   Expert.BlameGutter, Expert.BlameDialogs, Expert.PluginSettings,
   Expert.FindUnitDialog, Expert.AutoImport, Expert.FindOriginalSymbolWizard,
   Expert.UsesCleanup, Expert.StatementRefactor, Expert.SafeDelete, Expert.IncludeExpander,
@@ -523,6 +524,7 @@ begin
   Plain(ChecksSub, 'Interface GUIDs...',           OnCheckInterfaceGuids,  REQ_PROJECT);
   Plain(ChecksSub, 'Circular unit references...',  OnCheckCircularRefs,    REQ_PROJECT);
   Plain(ChecksSub, 'Debug consistency...',         OnCheckDebugConsistency, REQ_PROJECT);
+  Plain(ChecksSub, 'Line endings...',              OnCheckLineEndings,     REQ_PROJECT);
 
   Sep(Root);
   Leaf(Root, 'Code Completion',           OnCompletion,           skCompletion, REQ_EDITOR);
@@ -1737,6 +1739,11 @@ end;
 procedure TContextMenuInstaller.OnCheckDebugConsistency(Sender: TObject);
 begin
   Expert.DebugConsistencyDialog.CheckDebugConsistency;
+end;
+
+procedure TContextMenuInstaller.OnCheckLineEndings(Sender: TObject);
+begin
+  Expert.LineEndingDialog.CheckLineEndings;
 end;
 
 end.

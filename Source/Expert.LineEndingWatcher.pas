@@ -54,6 +54,13 @@ function LineEndingWatcherStatus: string;
 ///  (the saved setting is TPluginSettings.LineEndingAutoFix).</summary>
 function LineEndingFixAlwaysThisSession: Boolean;
 
+/// <summary>Rewrites one file's line breaks as CRLF and makes the IDE
+///  re-read it. AWhy says what stopped it. THE one implementation - the
+///  warning at file open, the project check and the MCP tool all call it,
+///  so they cannot disagree about when a file may be rewritten. MAIN
+///  THREAD (it asks the IDE about the module and reloads it).</summary>
+function FixLineEndingsOf(const AFileName: string; out AWhy: string): Boolean;
+
 implementation
 
 uses
@@ -198,9 +205,7 @@ begin
   end;
 end;
 
-/// <summary>Converts one file and makes the IDE re-read it. AWhy says what
-///  stopped it.</summary>
-function FixOne(const AFileName: string; out AWhy: string): Boolean;
+function FixLineEndingsOf(const AFileName: string; out AWhy: string): Boolean;
 begin
   AWhy := '';
   Result := False;
@@ -258,7 +263,7 @@ var
 begin
   Problems := '';
   for F in AFiles do
-    if FixOne(F.FileName, Why) then
+    if FixLineEndingsOf(F.FileName, Why) then
       Inc(GFixed)
     else
     begin
