@@ -671,6 +671,16 @@ type
     [Test] procedure WhatWasActedOnIsNeverCutFromTheAnswer;
   end;
 
+  /// <summary>Forum report 2026-10-15: Delphi had been installed by an admin
+  ///  account, so rsvars.bat and the registry name THAT account's Documents
+  ///  folder as the common directory - and every build of a user without
+  ///  those rights died with MSB3191 on a path it cannot create.</summary>
+  [TestFixture]
+  TInstallOutputRootTests = class
+  public
+    [Test] procedure ABuildNeverWritesWhereItMayNot;
+  end;
+
   [TestFixture]
   TCheckScopeTests = class
   public
@@ -726,7 +736,7 @@ uses
   Expert.MoveToUnit, Expert.SafeDeletePlan, Expert.McpTools, Expert.WithRewriter,
   Expert.SemanticReplace, Expert.SelectionValidator, Expert.ExtractMethod,
   Expert.SignatureEdit, Expert.MethodEdit, System.StrUtils,
-  Expert.DebugConsistency;
+  Expert.DebugConsistency, DIH.Placeholders;
 
 const
   NL = sLineBreak;
@@ -5502,6 +5512,65 @@ begin
     [LowerCase(Issues[0].Id)]))), 'a known id in another case is known');
 end;
 
+{ TInstallOutputRootTests }
+
+procedure TInstallOutputRootTests.ABuildNeverWritesWhereItMayNot;
+const
+  Common = 'C:\Users\ADMHUMMMA\Documents\Embarcadero\Studio\37.0';
+  Local  = 'C:\Users\normaluser\AppData\Local';
+  Public_ = 'C:\Users\Public\Documents\Embarcadero\Studio\37.0';
+var
+  Root, Note: string;
+  Asked: TArray<string>;
+
+  function ProbeAllowing(const AAllowed: string): TDIHWriteProbe;
+  begin
+    Result :=
+      function(const ADir: string): Boolean
+      begin
+        Asked := Asked + [ADir];
+        Result := (AAllowed <> '') and ADir.StartsWith(AAllowed, True);
+      end;
+  end;
+
+begin
+  // The ordinary machine: the common directory is writable, so nothing moves
+  // and nothing is said. This is the case every existing user is in, and it
+  // must stay byte for byte what it was.
+  Asked := nil;
+  DecideBuildOutputRoot(Public_, '37.0', Local, ProbeAllowing('C:'), Root, Note);
+  Assert.AreEqual(Public_, Root, 'a writable common directory is used as it is');
+  Assert.AreEqual('', Note, 'and there is nothing to report');
+  Assert.AreEqual(1, Integer(Length(Asked)),
+    'the fallback is not even probed when it is not needed');
+
+  // The reported machine: Delphi installed by ADMHUMMMA, this account cannot
+  // write there.
+  Asked := nil;
+  DecideBuildOutputRoot(Common, '37.0', Local, ProbeAllowing(Local), Root, Note);
+  Assert.AreEqual(Local + '\Embarcadero\Studio\37.0', Root,
+    'the build goes to a directory this account owns');
+  Assert.IsTrue(Note.Contains(Common) and Note.Contains(Root),
+    'and the log names BOTH paths - the next report must not have to guess: ' + Note);
+  Assert.IsTrue(Note.Contains('registered'),
+    'it also says the package is registered from there, which is what makes ' +
+    'it work at all');
+
+  // Neither writable: that build is going to fail, and saying why beats the
+  // MSB3191 it would fail with. The root stays the IDE's value, so nothing
+  // is registered from a directory that does not exist.
+  Asked := nil;
+  DecideBuildOutputRoot(Common, '37.0', Local, ProbeAllowing(''), Root, Note);
+  Assert.AreEqual(Common, Root, 'no invented directory when nothing is writable');
+  Assert.IsTrue(Note.StartsWith('WARNING'), 'and it is a warning: ' + Note);
+  Assert.AreEqual(2, Integer(Length(Asked)), 'both were tried');
+
+  // A probe we cannot run decides nothing - the caller keeps the IDE's value.
+  DecideBuildOutputRoot(Common, '37.0', Local, nil, Root, Note);
+  Assert.AreEqual(Common, Root, 'without a probe, nothing is substituted');
+  Assert.AreEqual('', Note, 'and nothing is claimed');
+end;
+
 { TCheckScopeTests }
 
 procedure TCheckScopeTests.ADuplicateUnitNameIsReportedAsSkipped;
@@ -5841,6 +5910,7 @@ initialization
   TDUnitX.RegisterTestFixture(TUnitRenameScopeTests);
   TDUnitX.RegisterTestFixture(TDfmAliasOnlyTests);
   TDUnitX.RegisterTestFixture(TLineEndingCheckTests);
+  TDUnitX.RegisterTestFixture(TInstallOutputRootTests);
   TDUnitX.RegisterTestFixture(TCheckScopeTests);
   TDUnitX.RegisterTestFixture(TExtractAndCompletionTests);
 

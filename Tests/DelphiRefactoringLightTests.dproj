@@ -37,7 +37,7 @@
     <PropertyGroup Condition="'$(Base)'!=''">
         <DCC_DcuOutput>.\$(Platform)\$(Config)</DCC_DcuOutput>
         <DCC_ExeOutput>.\$(Platform)\$(Config)</DCC_ExeOutput>
-        <DCC_UnitSearchPath>..\Source;$(BDS)\source\DunitX;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\Source;..\dih;$(BDS)\source\DunitX;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <DCC_Define>STANDALONE_BUILD;$(DCC_Define)</DCC_Define>
         <DCC_E>false</DCC_E>
         <DCC_F>false</DCC_F>

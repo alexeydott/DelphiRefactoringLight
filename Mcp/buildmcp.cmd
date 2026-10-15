@@ -46,7 +46,12 @@ set "MCP_LOG=%TEMP%\refactoringlight_mcp_build.log"
 :: MSB4036 unless .NET 3.5 is installed (forum log 2026-10-06). Delphi
 :: itself points at .NET 4.x, so naming the toolset only removes a
 :: machine-dependent choice.
-msbuild "%DPROJ%" /t:Build /tv:4.0 /p:Platform=Win32 /p:Config=Release /v:m /nologo > "%MCP_LOG%" 2>&1
+:: An EXE project writes no BPL, no DCP and no .hpp - but CodeGear.Delphi
+:: .Targets creates those directories anyway, and they default to
+:: $(BDSCOMMONDIR), which rsvars.bat hard-codes to the Documents folder of
+:: whoever INSTALLED Delphi. Where that is another account, msbuild dies
+:: with MSB3191 on folders this build never uses (forum log 2026-10-15).
+msbuild "%DPROJ%" /t:Build /tv:4.0 /p:Platform=Win32 /p:Config=Release /p:DCC_BplOutput="%TEMP%" /p:DCC_DcpOutput="%TEMP%" /p:DCC_HppOutput="%TEMP%" /v:m /nologo > "%MCP_LOG%" 2>&1
 set MSBUILD_ERR=%ERRORLEVEL%
 :: ANY msbuild failure goes to the IDE, exactly as dih\builddih.cmd does.
 :: Gating the fallback on the "does not support command line" message was

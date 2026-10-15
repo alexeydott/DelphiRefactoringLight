@@ -57,6 +57,10 @@ uses
   Expert.SignatureEdit in '..\Source\Expert.SignatureEdit.pas',
   Expert.MethodEdit in '..\Source\Expert.MethodEdit.pas',
   Expert.DebugConsistency in '..\Source\Expert.DebugConsistency.pas',
+  // The installer's own rule for where a build may write (forum
+  // report 2026-10-15: Delphi installed by another account).
+  DIH.Types in '..\dih\DIH.Types.pas',
+  DIH.Placeholders in '..\dih\DIH.Placeholders.pas',
   Expert.ReferenceKind in '..\Source\Expert.ReferenceKind.pas',
   Expert.SemanticReplace in '..\Source\Expert.SemanticReplace.pas',
   Mcp.Protocol in '..\Source\Mcp.Protocol.pas',
