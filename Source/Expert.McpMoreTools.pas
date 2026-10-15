@@ -2878,6 +2878,9 @@ begin
 
   var Applied := TDictionary<string, string>.Create;
   try
+    var ActedIds: TArray<string> := nil;
+    var Corrected := 0;
+    var Failed := 0;
     if DoApply then
       for var Issue in Issues do
       begin
@@ -2898,16 +2901,22 @@ begin
             else Outcome := 'NOT corrected: ' + Why;
           end, True, AStop, Err) then Outcome := 'NOT corrected: ' + Err;
         Applied.AddOrSetValue(UpperCase(Issue.Id), Outcome);
+        ActedIds := ActedIds + [Issue.Id];
+        if Outcome.StartsWith('corrected') then Inc(Corrected) else Inc(Failed);
       end;
 
-    var Arr := TJSONArray.Create;
     var Mixed := 0;
-    var Shown := 0;
     for var Issue in Issues do
-    begin
       if Issue.Info.Kind = lekMixed then Inc(Mixed);
-      if Shown >= Max then Continue;
-      Inc(Shown);
+
+    // A row that was acted on is always carried, whatever "max" says: it is
+    // what the call asked about, and a budget that drops it leaves the
+    // caller with the pauschal note alone (found live, 2026-10-15).
+    var Arr := TJSONArray.Create;
+    var Rows := SelectLineEndingRows(Issues, ActedIds, Max);
+    for var Idx in Rows do
+    begin
+      var Issue := Issues[Idx];
       var O := TJSONObject.Create;
       O.AddPair('id', Issue.Id);
       O.AddPair('file', Issue.FileName);
@@ -2920,17 +2929,33 @@ begin
         O.AddPair('result', Outcome);
       Arr.Add(O);
     end;
+
     var Res := TJSONObject.Create;
     Res.AddPair('applied', TJSONBool.Create(DoApply));
     Res.AddPair('filesChecked', TJSONNumber.Create(Length(Files)));
     Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
-    Res.AddPair('listed', TJSONNumber.Create(Shown));
+    Res.AddPair('listed', TJSONNumber.Create(Length(Rows)));
     Res.AddPair('mixed', TJSONNumber.Create(Mixed));
     Res.AddPair('files', Arr);
     if DoApply then
-      Res.AddPair('note', 'The files you named are CRLF now; their encoding ' +
-        'is unchanged and nothing but the line breaks moved. A file the IDE ' +
-        'had open was reloaded.');
+    begin
+      Res.AddPair('corrected', TJSONNumber.Create(Corrected));
+      if Failed > 0 then
+        Res.AddPair('notCorrected', TJSONNumber.Create(Failed));
+      // An id no finding carries got nothing done for it - the file may
+      // already be CRLF, or the ids come from an older scan. Silence about
+      // that would read as success.
+      var Unknown := UnknownLineEndingIds(Issues, WantIds);
+      if Length(Unknown) > 0 then
+        Res.AddPair('unknownIds', string.Join(', ', Unknown) +
+          ' - no finding of this scan carries that id, so nothing was done ' +
+          'for it (already CRLF, not a file this check rewrites, or the id ' +
+          'is from an older scan - list again)');
+      Res.AddPair('note', Format('%d file(s) rewritten as CRLF, encoding ' +
+        'unchanged and nothing but the line breaks moved; a file the IDE had ' +
+        'open was reloaded. "total" and the rows describe the scan taken ' +
+        'BEFORE the correction - list again for the state now.', [Corrected]));
+    end;
     Result := McpOk(Res);
   finally
     Applied.Free;

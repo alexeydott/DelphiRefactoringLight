@@ -149,8 +149,13 @@ function IsReadOnlyFile(const AFileName: string): Boolean;
 var
   Attr: Integer;
 begin
+  // faReadOnly is a Windows attribute, and so is TFileAttribute's - this
+  // unit is IDE-only (Windows) either way, so the platform warning is
+  // switched off here rather than worked around.
+  {$WARN SYMBOL_PLATFORM OFF}
   Attr := FileGetAttr(AFileName);
   Result := (Attr >= 0) and ((Attr and faReadOnly) <> 0);
+  {$WARN SYMBOL_PLATFORM ON}
 end;
 
 /// <summary>The file's line-ending verdict, or NeedsFix = False for

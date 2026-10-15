@@ -190,6 +190,22 @@ function CollectLineEndingIssues(const AFiles: TArray<string>;
   const AReader: TLineEndingReader;
   const AProgress: TLineEndingProgress = nil): TArray<TLineEndingIssue>;
 
+/// <summary>Which findings an answer must carry, as indexes into AIssues:
+///  every one that was ACTED on, whatever AMax says, plus as many of the
+///  rest as fit. A row that was acted on IS the answer to the call - a
+///  budget that cuts it away leaves the caller unable to see what
+///  happened, which is the one thing it asked about. AMax &lt;= 0 means
+///  "only the acted ones".</summary>
+function SelectLineEndingRows(const AIssues: TArray<TLineEndingIssue>;
+  const AActedIds: TArray<string>; AMax: Integer): TArray<Integer>;
+
+/// <summary>Ids the caller named that no finding carries: the file is
+///  already CRLF, is not a file we may rewrite, or the ids come from an
+///  older scan. NOTHING was done for them, and staying silent about that
+///  reads as success.</summary>
+function UnknownLineEndingIds(const AIssues: TArray<TLineEndingIssue>;
+  const AIds: TArray<string>): TArray<string>;
+
 type
   TSourceDirective = record
     Line: Integer;       // 1-based
@@ -562,6 +578,58 @@ begin
     end;
   finally
     Seen.Free;
+  end;
+end;
+
+function SelectLineEndingRows(const AIssues: TArray<TLineEndingIssue>;
+  const AActedIds: TArray<string>; AMax: Integer): TArray<Integer>;
+var
+  I: Integer;
+  Left: Integer;
+
+  function Acted(const AId: string): Boolean;
+  var
+    S: string;
+  begin
+    for S in AActedIds do
+      if SameText(S, AId) then Exit(True);
+    Result := False;
+  end;
+
+begin
+  Result := nil;
+  Left := AMax;
+  // The order of the findings is kept - an acted row does not jump to the
+  // front, it simply cannot be dropped.
+  for I := 0 to High(AIssues) do
+    if Acted(AIssues[I].Id) then
+      Result := Result + [I]
+    else if Left > 0 then
+    begin
+      Result := Result + [I];
+      Dec(Left);
+    end;
+end;
+
+function UnknownLineEndingIds(const AIssues: TArray<TLineEndingIssue>;
+  const AIds: TArray<string>): TArray<string>;
+var
+  Id: string;
+  Issue: TLineEndingIssue;
+  Known: Boolean;
+begin
+  Result := nil;
+  for Id in AIds do
+  begin
+    if Trim(Id) = '' then Continue;
+    Known := False;
+    for Issue in AIssues do
+      if SameText(Issue.Id, Id) then
+      begin
+        Known := True;
+        Break;
+      end;
+    if not Known then Result := Result + [Id];
   end;
 end;
 

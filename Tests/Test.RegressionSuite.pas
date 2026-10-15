@@ -658,6 +658,10 @@ type
     /// <summary>...and the tool declares what it reads. An argument the
     ///  schema does not list is dropped silently (1.16.11).</summary>
     [Test] procedure TheLineEndingToolDeclaresWhatItTakes;
+    /// <summary>Found live on 2026-10-15: one id named, three OTHER files
+    ///  listed - the row that was acted on had been cut away by the row
+    ///  budget, so what happened to it was invisible.</summary>
+    [Test] procedure WhatWasActedOnIsNeverCutFromTheAnswer;
   end;
 
   [TestFixture]
@@ -5374,6 +5378,61 @@ begin
   Assert.IsTrue(Declares('fix_ids'), 'fix_ids is declared');
   Assert.IsTrue(Declares('max'), 'max is declared');
   Assert.IsFalse(Declares('files'), 'and nothing it does not read');
+end;
+
+procedure TLineEndingCheckTests.WhatWasActedOnIsNeverCutFromTheAnswer;
+var
+  Issues: TArray<TLineEndingIssue>;
+
+  function Issue(const AFile: string): TLineEndingIssue;
+  begin
+    Result := Default(TLineEndingIssue);
+    Result.FileName := AFile;
+    Result.Info := ClassifyLineEndings(TEncoding.UTF8.GetBytes('a'#10'b'#10));
+    Result.Id := LineEndingIssueId(AFile);
+  end;
+
+  function Ids(const ARows: TArray<Integer>): string;
+  begin
+    Result := '';
+    for var R in ARows do
+      Result := Result + Issues[R].FileName + ' ';
+  end;
+
+begin
+  Issues := [Issue('A.pas'), Issue('B.pas'), Issue('C.pas'), Issue('D.pas')];
+
+  // The reported shape: one id named, a budget of three. The acted row is
+  // the LAST finding, so the old "first N" rule dropped exactly it.
+  var Rows := SelectLineEndingRows(Issues, [Issues[3].Id], 3);
+  Assert.IsTrue(Ids(Rows).Contains('D.pas'),
+    'the file that was corrected must be in the answer');
+  Assert.AreEqual('A.pas B.pas C.pas D.pas ', Ids(Rows),
+    'and it does not cost one of the other rows, nor jump to the front');
+
+  // A budget of zero is how a caller asks for counts only - but what it
+  // just corrected is not a row it can do without.
+  Rows := SelectLineEndingRows(Issues, [Issues[1].Id], 0);
+  Assert.AreEqual('B.pas ', Ids(Rows), 'only the acted one, and that one');
+  Assert.AreEqual('', Ids(SelectLineEndingRows(Issues, nil, 0)),
+    'nothing acted on, no budget - no rows');
+  Assert.AreEqual('A.pas B.pas ', Ids(SelectLineEndingRows(Issues, nil, 2)),
+    'and a plain listing is still the first N');
+  Assert.AreEqual('A.pas B.pas C.pas D.pas ',
+    Ids(SelectLineEndingRows(Issues, nil, 99)),
+    'a budget nobody reaches lists everything');
+  // The id comes back from a client that may upper-case it.
+  Assert.AreEqual('C.pas ',
+    Ids(SelectLineEndingRows(Issues, [UpperCase(Issues[2].Id)], 0)),
+    'the case of the id does not decide whether the row survives');
+
+  // An id of an older scan: nothing was done for it, and the answer has to
+  // say so - the note alone would read as "your file is CRLF now".
+  var Unknown := UnknownLineEndingIds(Issues, [Issues[0].Id, 'DEADBEEF', '']);
+  Assert.AreEqual(1, Integer(Length(Unknown)), 'one id named nothing');
+  Assert.AreEqual('DEADBEEF', Unknown[0], 'and it is named');
+  Assert.AreEqual(0, Integer(Length(UnknownLineEndingIds(Issues,
+    [LowerCase(Issues[0].Id)]))), 'a known id in another case is known');
 end;
 
 { TCheckScopeTests }
