@@ -74,6 +74,16 @@ type
     ///  full path. A build property may be SET to a configuration name,
     ///  never to a file path.</summary>
     [Test] procedure NoScriptPutsAPathIntoABuildProperty;
+
+    /// <summary>The refactor section of the menu is TWO alphabetical blocks
+    ///  (user 2026-10-16: "sortiert und mit einer Trennlinie zwischen 'mach
+    ///  etwas neu' und 'aendere etwas'"). With a dozen entries the question
+    ///  that costs time is "where does it stand?", and the answer must not
+    ///  depend on when an entry was added - which is exactly what happens
+    ///  when the next feature is appended at the end, as every entry of
+    ///  this menu was until now. BuildMenuTree is IDE-only (ToolsAPI), so
+    ///  this reads the SOURCE, like the other sweeps here.</summary>
+    [Test] procedure TheMenuRefactorBlocksStayAlphabetical;
   end;
 
 implementation
@@ -437,6 +447,93 @@ begin
   var V := Trim(AValue);
   Result := V.Contains('\') or V.Contains('/') or V.Contains(':') or
     UpperCase(V).Contains('.XML');
+end;
+
+procedure TRepoHygieneTests.TheMenuRefactorBlocksStayAlphabetical;
+var
+  Blocks: TArray<TArray<string>>;
+
+  // Every Leaf/Plain row added directly to Root, in source order, split at
+  // the Sep(Root) calls. A Sub(Root, ...) row is a SUBMENU and deliberately
+  // not part of a block's sequence; a caption that is a CONSTANT (not a
+  // literal) belongs to another block and is skipped the same way.
+  procedure ReadMenu(const AText: string);
+  begin
+    Blocks := nil;
+    SetLength(Blocks, 1);
+    var Lines := AText.Replace(#13#10, #10).Split([#10]);
+    var InTree := False;
+    for var Raw in Lines do
+    begin
+      var L := Trim(StripLineComment(Raw));
+      if L.StartsWith('function TContextMenuInstaller.BuildMenuTree') then
+        InTree := True
+      else if InTree and (L = 'Result := Root;') then
+        Break
+      else if InTree then
+      begin
+        if L.StartsWith('Sep(Root)') then
+          SetLength(Blocks, Length(Blocks) + 1)
+        else if L.StartsWith('Leaf(Root,') or L.StartsWith('Plain(Root,') then
+        begin
+          var P := Pos('''', L);
+          if P > 0 then
+          begin
+            var Rest := Copy(L, P + 1, MaxInt);
+            var E := Pos('''', Rest);
+            if E > 1 then
+            begin
+              var Cap := Copy(Rest, 1, E - 1);
+              Blocks[High(Blocks)] := Blocks[High(Blocks)] + [Cap];
+            end;
+          end;
+        end;
+      end;
+    end;
+  end;
+
+  function OutOfOrder(const ABlock: TArray<string>): string;
+  begin
+    Result := '';
+    for var I := 1 to High(ABlock) do
+      if CompareText(ABlock[I - 1], ABlock[I]) > 0 then
+        Exit(Format('"%s" stands before "%s"', [ABlock[I - 1], ABlock[I]]));
+  end;
+
+begin
+  var Root := RepoRoot;
+  Assert.IsTrue(Root <> '', 'the repository root must be found');
+  var Menu := TPath.Combine(TPath.Combine(Root, 'Source'), 'Expert.ContextMenu.pas');
+  Assert.IsTrue(TFile.Exists(Menu), 'Expert.ContextMenu.pas must be there');
+
+  ReadMenu(TFile.ReadAllText(Menu, TEncoding.UTF8));
+
+  // Guard against a vacuous pass: a renamed helper or a reshaped tree would
+  // otherwise leave two empty "sorted" blocks behind.
+  Assert.IsTrue(Length(Blocks) >= 5, Format(
+    'the menu tree must still have its separated groups (found %d)',
+    [Length(Blocks)]));
+  Assert.IsTrue(Length(Blocks[0]) >= 4, Format(
+    'block 1 (create something new) must carry its entries (found %d)',
+    [Length(Blocks[0])]));
+  Assert.IsTrue(Length(Blocks[1]) >= 8, Format(
+    'block 2 (change what is there) must carry its entries (found %d)',
+    [Length(Blocks[1])]));
+
+  Assert.AreEqual('', OutOfOrder(Blocks[0]),
+    'the "create something new" block is alphabetical');
+  Assert.AreEqual('', OutOfOrder(Blocks[1]),
+    'the "change what is there" block is alphabetical');
+
+  // And the two tools with a scope dialog belong to the project-wide group,
+  // not to the cursor blocks - "Project checks" sits right after them.
+  var AtCursor := '';
+  for var C in Blocks[0] do AtCursor := AtCursor + C + '|';
+  for var C in Blocks[1] do AtCursor := AtCursor + C + '|';
+  Assert.IsFalse(AtCursor.Contains('Remove with'),
+    'Remove with is a project-wide tool, not a cursor refactoring');
+  Assert.IsFalse(AtCursor.Contains('Expand include files'),
+    'Expand include files is a project-wide tool');
 end;
 
 procedure TRepoHygieneTests.NoScriptPutsAPathIntoABuildProperty;
