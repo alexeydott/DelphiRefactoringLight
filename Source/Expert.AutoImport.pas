@@ -134,7 +134,8 @@ function InferAssignedType(const ARhs: string): string;
 ///  var section, or with a new 'var' line when the last section is none
 ///  or const/type/label. AText is raw text incl. line breaks, to insert
 ///  at the START of line AInsertLine0. False without an enclosing routine
-///  or with a nested routine before the body.</summary>
+///  (a nested routine before the body is skipped whole - the declaration
+///  then goes after it, which Delphi allows in any order).</summary>
 function PlanLocalVarDecl(const ALines: TArray<string>; AUseLine0: Integer;
   const AIdent, AType: string; out AInsertLine0: Integer;
   out AText: string): Boolean;
@@ -1260,8 +1261,7 @@ begin
   if (AKeyword = '') or (Trim(ABody) = '') then Exit;
   Want := UpperCase(AKeyword);
   if (AUseLine0 < 0) or (AUseLine0 > High(ALines)) then Exit;
-  if not FindEnclosingRoutineRange(string.Join(sLineBreak, ALines), AUseLine0,
-    First, Last) then Exit;
+  if not FindEnclosingRoutineRangeIn(ALines, AUseLine0, First, Last) then Exit;
   // the header may wrap its parameter list - a "var X: Integer" parameter
   // line must not read as the routine's var section
   HdrEnd := First;
@@ -1278,7 +1278,8 @@ begin
   end;
   BeginLine := -1;
   LastSect := '';   // the keyword of the section standing closest to 'begin'
-  for I := HdrEnd + 1 to Min(Last, AUseLine0) do
+  I := HdrEnd + 1;
+  while I <= Min(Last, AUseLine0) do
   begin
     T := Trim(DvStripComment(ALines[I]));
     U := UpperCase(T);
@@ -1287,15 +1288,28 @@ begin
       BeginLine := I;
       Break;
     end;
-    // a NESTED routine before the body: its sections would be mistaken for
-    // ours - no local declaration then (the inline form stays available)
+    // A NESTED routine before the body is SKIPPED WHOLE - its own sections
+    // and its 'begin' are not ours. Until 1.28.1 this refused outright, so
+    // a routine with nested routines could not take a local declaration at
+    // all (user 2026-10-16, KimSendMail). A bodyless one (a nested forward)
+    // is only a line to step over.
     var K: string;
     var CM: Boolean;
-    if IsHeaderLine(T, K, CM) then Exit;
-    if (U = 'VAR') or U.StartsWith('VAR ') then LastSect := 'VAR'
+    if IsHeaderLine(T, K, CM) then
+    begin
+      var NF, NL: Integer;
+      if FindEnclosingRoutineRangeIn(ALines, I, NF, NL) and (NL > I) then
+        I := NL;
+      // A declaration part may hold sections in any order, so what follows
+      // the nested routine is a NEW section - whatever stood before it has
+      // been closed by that declaration.
+      LastSect := '';
+    end
+    else if (U = 'VAR') or U.StartsWith('VAR ') then LastSect := 'VAR'
     else if (U = 'CONST') or U.StartsWith('CONST ') then LastSect := 'CONST'
     else if (U = 'TYPE') or U.StartsWith('TYPE ') then LastSect := 'TYPE'
     else if (U = 'LABEL') or U.StartsWith('LABEL ') then LastSect := 'LABEL';
+    Inc(I);
   end;
   if (BeginLine < 0) or (BeginLine >= AUseLine0) then Exit;
   Indent := Copy(ALines[BeginLine], 1,

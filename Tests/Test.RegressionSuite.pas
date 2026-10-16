@@ -702,6 +702,10 @@ type
     ///  one the schema does not list is dropped before the handler sees it,
     ///  and the caller is told nothing (1.16.11).</summary>
     [Test] procedure TheConstantToolDeclaresWhatItTakes;
+    /// <summary>Screenshot 2026-10-16: nested routines before the
+    ///  outer begin hid the routine the caret is really in.</summary>
+    [Test] procedure ANestedRoutineDoesNotHideTheOneAroundIt;
+    [Test] procedure AClassMemberIsNoNestedRoutine;
   end;
 
   /// <summary>Forum idea 2026-10-16: convert a project's sources from one
@@ -5836,6 +5840,143 @@ begin
     Assert.IsTrue(Declares(Needed), Needed + ' is declared');
   Assert.IsFalse(Declares('expression'),
     'and nothing it does not read - that is extract_variable''s name for it');
+end;
+
+procedure TDeclareConstantTests.AClassMemberIsNoNestedRoutine;
+var
+  Lines: TArray<string>;
+  First, Last: Integer;
+begin
+  // Found by the old-vs-new sweep over real sources (UGTIKim.pas:982)
+  // while fixing the nested-routine report: a class declared in the
+  // IMPLEMENTATION section has method declarations that look exactly like
+  // a nested routine''s header. Reading them as nested made the walk run
+  // through the whole implementation section, so a blank line between two
+  // routines answered with a 2000-line "routine". What separates the two
+  // is that a nested routine is INDENTED deeper than its own header.
+  Lines := [
+    'unit U;',                                   //  0
+    'interface',                                 //  1
+    'implementation',                            //  2
+    '',                                          //  3
+    'type',                                      //  4
+    '  TEvents = class',                         //  5
+    '    procedure Handle(A: TObject);',         //  6  <- a MEMBER
+    '  end;',                                    //  7
+    '',                                          //  8
+    'procedure TEvents.Handle(A: TObject);',     //  9
+    'begin',                                     // 10
+    '  DoIt;',                                   // 11
+    'end;',                                      // 12
+    '',                                          // 13
+    'procedure Later;',                          // 14
+    'begin',                                     // 15
+    '  DoMore;',                                 // 16
+    'end;',                                      // 17
+    '',                                          // 18
+    'end.',                                      // 19
+    ''];
+
+  Assert.IsFalse(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 6,
+    First, Last), 'a class member declaration is no routine body');
+  Assert.IsFalse(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 13,
+    First, Last), 'and the blank line between two routines is in none');
+  Assert.IsFalse(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 8,
+    First, Last), 'nor the one below the class');
+  // The real routines are still found, and each one only to its own end.
+  Assert.IsTrue(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 11,
+    First, Last));
+  Assert.AreEqual(9, First);
+  Assert.AreEqual(12, Last, 'its OWN end, not the next routine''s');
+  Assert.IsTrue(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 16,
+    First, Last));
+  Assert.AreEqual(14, First);
+end;
+
+procedure TDeclareConstantTests.ANestedRoutineDoesNotHideTheOneAroundIt;
+var
+  Lines: TArray<string>;
+  First, Last: Integer;
+  Plan: TDeclarePlan;
+  Req: TDeclareRequest;
+  Why: string;
+  Col: Integer;
+begin
+  // The reported shape (screenshot 2026-10-16, KimSendMail): a routine
+  // whose declaration part holds nested routines, and the caret far below
+  // them in the OUTER body. "the selection is not inside a routine" was
+  // the answer, and the user named the cause.
+  Lines := [
+    'unit U;',                                   //  0
+    'interface',                                 //  1
+    'implementation',                            //  2
+    '',                                          //  3
+    'procedure KimSendMail;',                    //  4
+    '',                                          //  5
+    '  procedure Inner1;',                       //  6
+    '  begin',                                   //  7
+    '    DoA;',                                  //  8
+    '  end;',                                    //  9
+    '',                                          // 10
+    '  function Inner2: Integer;',               // 11
+    '  begin',                                   // 12
+    '    Result := 1;',                          // 13
+    '  end;',                                    // 14
+    '',                                          // 15
+    'var',                                       // 16
+    '  I: Integer;',                             // 17
+    'begin',                                     // 18
+    '  LastErrorMessage := ''no recipient'';',   // 19
+    '  Done;',                                   // 20
+    'end;',                                      // 21
+    '',                                          // 22
+    'procedure After;',                          // 23
+    'begin',                                     // 24
+    '  X := 1;',                                 // 25
+    'end;',                                      // 26
+    '',                                          // 27
+    'end.',                                      // 28
+    ''];
+
+  // The routine around line 19 is KimSendMail, not Inner2.
+  Assert.IsTrue(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 19,
+    First, Last), 'line 19 IS inside a routine');
+  Assert.AreEqual(4, First, 'the OUTER header, not the last nested one');
+  Assert.AreEqual(21, Last, 'and its own end');
+
+  // Inside a nested routine the answer is still that nested routine.
+  Assert.IsTrue(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 13,
+    First, Last));
+  Assert.AreEqual(11, First, 'a line inside Inner2 belongs to Inner2');
+  Assert.AreEqual(14, Last);
+
+  // A line between two routines belongs to neither.
+  Assert.IsFalse(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 22,
+    First, Last), 'the blank line between two routines is in no routine');
+
+  // The routine AFTER one with nested routines is still found.
+  Assert.IsTrue(FindEnclosingRoutineRange(string.Join(#13#10, Lines), 25,
+    First, Last));
+  Assert.AreEqual(23, First);
+
+  // ...and that is what the dialog needs: a local const in KimSendMail.
+  Col := ColOf(Lines[19], '''no recipient''');
+  Req := DeclareRequestFor(Lines, 19, Col, Col + Length('''no recipient'''));
+  Req.Name := 'SNoRecipient';
+  Req.Place := dplLocal;
+  Assert.IsTrue(PlanDeclare(Lines, Req, Plan, Why), Why);
+  var Text := string.Join(#10, Plan.NewLines);
+  // Its own const section, after the nested routines and right before the
+  // outer 'begin' - which is where Delphi allows it and where the nested
+  // routines cannot see it (they must not; the use site is in the body).
+  Assert.IsTrue(Text.Contains('const' + #10 + '  SNoRecipient = ''no recipient'';'),
+    'its own const section in the OUTER routine: ' + Plan.DeclText);
+  Assert.IsTrue(Text.IndexOf('const' + #10 + '  SNoRecipient') >
+    Text.IndexOf('function Inner2'), 'and it stands AFTER the nested ones');
+  Assert.IsTrue(Text.Contains('LastErrorMessage := SNoRecipient;'),
+    'and the use site');
+  Assert.IsTrue(Text.Contains('  function Inner2: Integer;'),
+    'the nested routines are untouched');
 end;
 
 procedure TDeclareConstantTests.TheValueIsEditableAndMayComeFromNowhere;

@@ -1554,8 +1554,8 @@ function FindEnclosingRoutineRangeIn(const ALines: TArray<string>; ALine0: Integ
   out AFirst, ALast: Integer): Boolean;
 var
   Lines: TArray<string>;
-  I, Depth, HdrLine: Integer;
-  L, U: string;
+  I, HdrLine: Integer;
+  L: string;
 
   function Clean(const S: string): string;
   var
@@ -1602,6 +1602,65 @@ var
     Result := (Rest = '') or CharInSet(Rest[1], [';', ',', ')']);
   end;
 
+  function IndentOf(const S: string): Integer;
+  begin
+    Result := 0;
+    while (Result < Length(S)) and CharInSet(S[Result + 1], [' ', #9]) do
+      Inc(Result);
+  end;
+
+  // The line of AHdr's own final "end;", or -1 when that header declares
+  // only (an interface-section entry, a class member, a forward).
+  // A routine declared INSIDE this one - before its own 'begin' - is
+  // SKIPPED WHOLE. That is what the reported shape needed: the old walk
+  // met the first nested header at depth 0 and gave up as if the outer
+  // routine had no body at all.
+  function RoutineEnd(AHdr: Integer): Integer;
+  var
+    I, Depth, E, Indent: Integer;
+    L, U: string;
+  begin
+    Result := -1;
+    Depth := 0;
+    Indent := IndentOf(Lines[AHdr]);
+    I := AHdr + 1;
+    while I <= High(Lines) do
+    begin
+      L := Clean(Lines[I]);
+      if L <> '' then
+      begin
+        U := UpperCase(L);
+        if (Depth = 0) and IsHeader(U) then
+        begin
+          // Still before our own 'begin'. A header INDENTED deeper than
+          // ours is a NESTED routine - skip it whole. One at our own level
+          // (or further left) is a SIBLING, which means we never had a
+          // declaration part: a class member inside a type body, or an
+          // interface-section entry. Indentation is only trusted in this
+          // one direction - saying "not nested" merely returns the answer
+          // this function gave before nested routines were handled at all.
+          if IndentOf(Lines[I]) <= Indent then Exit(-1);
+          E := RoutineEnd(I);
+          if E < 0 then Exit(-1);
+          I := E;
+        end
+        else if (Depth = 0) and (StartsWithWord(U, 'IMPLEMENTATION')
+          or StartsWithWord(U, 'INITIALIZATION')
+          or StartsWithWord(U, 'FINALIZATION') or (U = 'END.')) then
+          Exit(-1)   // a routine body never holds these at depth 0
+        else if StartsWithWord(U, 'BEGIN') or StartsWithWord(U, 'TRY')
+          or StartsWithWord(U, 'CASE') then
+          Inc(Depth)
+        else if (Depth > 0) and IsBlockEnd(U) then
+        begin
+          Dec(Depth);
+          if Depth = 0 then Exit(I);
+        end;
+      end;
+      Inc(I);
+    end;
+  end;
+
 begin
   Result := False;
   AFirst := -1;
@@ -1609,48 +1668,23 @@ begin
   Lines := ALines;
   if (ALine0 < 0) or (ALine0 > High(Lines)) then Exit;
 
-  // Nearest header at or above the line. A FORWARD declaration (header
-  // ending in ';' with no body) is skipped by the body walk below.
-  HdrLine := -1;
-  for I := ALine0 downto 0 do
+  // The INNERMOST routine whose body CONTAINS the line. Taking the nearest
+  // header above it is not enough: with nested routines declared before the
+  // outer 'begin', that header is the LAST NESTED one, and its body ends
+  // above the line (user 2026-10-16: "durch die nested routines vor dem
+  // begin wird nicht erkannt, dass wir uns in KimSendMail befinden"). So
+  // when a header's range does not contain the line, keep looking upwards.
+  for HdrLine := ALine0 downto 0 do
   begin
-    L := Clean(Lines[I]);
-    if L = '' then Continue;
-    if IsHeader(UpperCase(L)) then
+    L := Clean(Lines[HdrLine]);
+    if (L = '') or not IsHeader(UpperCase(L)) then Continue;
+    I := RoutineEnd(HdrLine);
+    if (I >= 0) and (ALine0 <= I) then
     begin
-      HdrLine := I;
-      Break;
+      AFirst := HdrLine;
+      ALast := I;
+      Exit(True);
     end;
-  end;
-  if HdrLine < 0 then Exit;
-
-  // Walk from the header to its final "end;".
-  Depth := 0;
-  for I := HdrLine to High(Lines) do
-  begin
-    L := Clean(Lines[I]);
-    if L = '' then Continue;
-    U := UpperCase(L);
-    if StartsWithWord(U, 'BEGIN') or StartsWithWord(U, 'TRY')
-      or StartsWithWord(U, 'CASE') then
-      Inc(Depth)
-    else if (Depth > 0) and IsBlockEnd(U) then
-    begin
-      Dec(Depth);
-      if Depth = 0 then
-      begin
-        // The line must actually lie inside what we walked.
-        if (ALine0 >= HdrLine) and (ALine0 <= I) then
-        begin
-          AFirst := HdrLine;
-          ALast := I;
-          Result := True;
-        end;
-        Exit;
-      end;
-    end
-    else if (Depth = 0) and (I > HdrLine) and IsHeader(U) then
-      Exit;   // next routine started - the first one had no body
   end;
 end;
 

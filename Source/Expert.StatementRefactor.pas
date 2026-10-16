@@ -1226,13 +1226,15 @@ begin
     Logic.ChkAll := TCheckBox.Create(Dlg);
     Logic.ChkAll.Parent := Dlg;
     Logic.ChkAll.SetBounds(92, Y, 332, 20);
-    // Without a selection there is no literal to look for, so the box says
-    // so instead of offering something that would be ignored.
-    if AReq.HasSelection then
-      Logic.ChkAll.Caption := 'Replace every other occurrence of ' +
-        Copy(ALines[AReq.Line0], AReq.StartCol0 + 1, AReq.EndCol0 - AReq.StartCol0)
-    else
+    // The VALUE belongs in the value edit above, not in this caption: a
+    // long literal simply ran past the edge of the box (user 2026-10-16,
+    // "der Text unten bei der Checkbox wird abgeschnitten. Dort den zu
+    // ersetzenden Text einzufuegen, ist wohl keine sinnvolle Option").
+    // How many occurrences it really is stands in the preview note.
+    Logic.ChkAll.Caption := 'Replace every other occurrence of this value';
+    if not AReq.HasSelection then
     begin
+      // Nothing was selected, so there is no literal to look for.
       Logic.ChkAll.Caption := 'Replace other occurrences (nothing selected)';
       Logic.ChkAll.Enabled := False;
     end;
