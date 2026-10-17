@@ -35,7 +35,8 @@ uses
   Expert.UnitAvailability, Expert.UsesEditor, Expert.UsesCleanup,
   Expert.ImplementationFinder, Expert.FindReferencesDialog, Expert.ScopeFiles,
   Expert.UsesGraph, Expert.DebugConsistency, Expert.DebugConsistencyDialog,
-  Expert.LineEndingDialog, Expert.FileEncodingCheck, Expert.LineEndingWatcher,
+  Expert.LineEndingDialog, Expert.FileEncodingCheck, Expert.UnusedUnits,
+  Expert.UnusedUnitsDialog, Expert.LineEndingWatcher,
   Expert.VcsBlame, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
   Expert.PluginSettings, Expert.IncludeExpansion, Expert.InterfaceLinks,
   Expert.SemanticReplace, Expert.SemanticReplaceWizard, Expert.MoveToUnit, Expert.SafeDelete,
@@ -3098,6 +3099,89 @@ begin
   end;
 end;
 
+function ToolUnusedUnits(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Facts: TArray<TUnitFacts>;
+  Issues: TArray<TUnusedUnitIssue>;
+  Notes, Ids: TArray<string>;
+  Err, GatherErr: string;
+begin
+  var Max := ArgInt(AArgs, 'max', 200);
+
+  // The gathering reads the project and the editor buffers, so it belongs
+  // on the main thread. The CLASSIFICATION does not - it runs the
+  // production parser over the candidates (15.7 ms each, measured), and
+  // doing that on the main thread would stand the IDE still for seconds.
+  Facts := nil;
+  GatherErr := '';
+  if not McpRunOnMain(
+    procedure
+    begin
+      Facts := GatherUnusedUnitFacts(GatherErr);
+    end, False, AStop, Err) then Exit(McpErr(Err));
+  if GatherErr <> '' then Exit(McpErr(GatherErr));
+  if Length(Facts) = 0 then Exit(McpErr('no project loaded / no source files'));
+
+  Issues := CollectUnusedProjectUnits(Facts, Notes, UnusedUnitDetailsReader());
+
+  var Res := TJSONObject.Create;
+  try
+    var Safe := 0;
+    var Hint := 0;
+    var Unknown := 0;
+    Ids := nil;
+    for var Issue in Issues do
+    begin
+      Ids := Ids + [Issue.Id];
+      case Issue.Kind of
+        uukSafe: Inc(Safe);
+        uukInitCode: Inc(Hint);
+        uukUnreadable: Inc(Unknown);
+      end;
+    end;
+
+    Res.AddPair('projectUnits', TJSONNumber.Create(Length(Facts)));
+    Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
+    Res.AddPair('unused', TJSONNumber.Create(Safe));
+    Res.AddPair('withInitCode', TJSONNumber.Create(Hint));
+    Res.AddPair('notChecked', TJSONNumber.Create(Unknown));
+
+    // The counts are always complete; the ROWS are capped. Saying which is
+    // which is the whole point - a budget that renames "found" into
+    // "listed" is the answer nobody can check.
+    var Arr := TJSONArray.Create;
+    for var Idx in SelectReportRows(Ids, nil, Max) do
+    begin
+      var Issue := Issues[Idx];
+      var O := TJSONObject.Create;
+      O.AddPair('id', Issue.Id);
+      O.AddPair('unit', Issue.UnitName);
+      O.AddPair('file', Issue.FileName);
+      case Issue.Kind of
+        uukSafe: O.AddPair('kind', 'unused');
+        uukInitCode: O.AddPair('kind', 'unused_with_init_code');
+        uukUnreadable: O.AddPair('kind', 'not_checked');
+      end;
+      O.AddPair('reason', Issue.Reason);
+      Arr.AddElement(O);
+    end;
+    Res.AddPair('rows', Arr);
+
+    var NoteArr := TJSONArray.Create;
+    for var N in Notes do NoteArr.Add(N);
+    Res.AddPair('notes', NoteArr);
+
+    Res.AddPair('note', 'Read-only: this check does not touch the project ' +
+      'file. "unused_with_init_code" is a HINT - such a unit is often in ' +
+      'the project to register itself. Only ONE layer is reported, so run ' +
+      'it again after removing something.');
+    Result := McpOk(Res);
+  except
+    Res.Free;
+    raise;
+  end;
+end;
+
 function ToolLineEndings(AArgs: TJSONObject; AStop: THandle): string;
 var
   Files, WantIds: TArray<string>;
@@ -3732,6 +3816,7 @@ initialization
   RegisterMcpTool('interface_guids', ToolInterfaceGuids);
   RegisterMcpTool('line_endings', ToolLineEndings);
   RegisterMcpTool('file_encoding', ToolFileEncoding);
+  RegisterMcpTool('unused_units', ToolUnusedUnits);
   RegisterMcpTool('dfm_events', ToolDfmEvents);
   RegisterMcpTool('find_unit_references', ToolFindUnitReferences);
   RegisterMcpTool('find_original_symbol', ToolFindOriginalSymbol);

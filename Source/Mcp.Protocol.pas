@@ -1095,6 +1095,11 @@ const
     '"max":{"type":"integer","description":"Most rows to return (default 200)."},' +
     ApplyProp + ',' + InstanceProp + '}}}' +
     ',' +
+    '{"name":"unused_units","description":"Units the PROJECT FILE lists although nothing in the project names them any more - they still get compiled and still clutter the project tree. A unit counts as used when any other unit uses it (units on the search path included, not only project ones) or when the project body names one of its identifiers, which is how a form reached only through Application.CreateForm is used; the project''s own uses clause is its unit LIST and never counts. Two kinds: unused, and unused_with_init_code - the latter is a HINT, because such a unit is often in the project exactly to register itself. READ-ONLY: it never touches the project file. Only ONE layer is reported, since two unused units that use each other keep each other alive. Packages are refused - the units a package contains are what it exists for."' +
+    ',"inputSchema":{"type":"object","properties":' +
+    '{"max":{"type":"integer","description":"Most rows to return (default 200). The counts are always complete."},' +
+    InstanceProp + '}}}' +
+    ',' +
     '{"name":"line_endings","description":"Every project source (and the files ' +
     'it includes) whose line breaks are not plain CRLF - LF only, CR only, or ' +
     'MIXED, which is the one Delphi handles worst (breakpoints land on the ' +

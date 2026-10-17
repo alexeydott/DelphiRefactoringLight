@@ -33,6 +33,11 @@ type
     /// <summary>What the check could not look at is named instead of
     ///  being left out, and the ids name the file, not a row.</summary>
     [Test] procedure WhatWasNotCheckedIsSaidOutLoud;
+    /// <summary>The expensive facts are asked for CANDIDATES only. The
+    ///  production parser needs 15.7 ms per file (measured over a real
+    ///  project), so over 1822 units the difference is half a minute
+    ///  against two seconds - the laziness IS the feature.</summary>
+    [Test] procedure TheExpensiveHalfOnlySeesCandidates;
   end;
 
 implementation
@@ -212,6 +217,74 @@ begin
   for N in Notes do Joined := Joined + N + '|';
   Assert.IsTrue(Joined.Contains('main source was not read'),
     'no main source is a limit worth naming: ' + Joined);
+end;
+
+procedure TUnusedUnitsTests.TheExpensiveHalfOnlySeesCandidates;
+var
+  Units: TArray<TUnitFacts>;
+  Main: TUnitFacts;
+  Issues: TArray<TUnusedUnitIssue>;
+  Notes: TArray<string>;
+  Asked: string;
+  Issue: TUnusedUnitIssue;
+begin
+  Main := Facts('Proj', 'C:\p\Proj.dpr', True, ['Live', 'Dead', 'Ghost']);
+  Main.IsMainUnit := True;
+  Main.MainBody := 'begin UseLive; Application.Run; end.';
+
+  Units := [Main,
+    Facts('Live', 'C:\p\Live.pas', True, []),      // reached from the body
+    Facts('Dead', 'C:\p\Dead.pas', True, []),      // a candidate
+    Facts('Ghost', 'C:\p\Ghost.pas', True, []),    // a candidate
+    Facts('User', 'C:\p\User.pas', True, ['Live'])];
+  // User is named from the body too, or it would be a candidate itself.
+  Units[4].ExportedIdents := ['UseLive'];
+
+  Asked := '';
+  Issues := CollectUnusedProjectUnits(Units, Notes,
+    function (const AFile: string; out AHasInit: Boolean;
+      out AIdents: TArray<string>): Boolean
+    begin
+      Asked := Asked + '|' + AFile;
+      AHasInit := AFile.Contains('Ghost');
+      // With a callback it is the source of truth, so what a unit exports
+      // comes from here too.
+      if AFile.Contains('User') then
+        AIdents := ['UseLive']
+      else
+        AIdents := nil;
+      Result := True;
+    end);
+
+  // The saving is the USES CLAUSE pass: Live is named by User and the main
+  // unit is never a candidate, so neither costs a parse. User IS asked -
+  // no uses clause names it, and the body test can only run once its
+  // exported identifiers are known, which is the expensive thing itself.
+  Assert.AreEqual('|C:\p\Dead.pas|C:\p\Ghost.pas|C:\p\User.pas', Asked, False,
+    'three of five units are parsed - the referenced ones are not');
+  // And the body rule still decides afterwards: User is not reported.
+  Assert.AreEqual('|Dead|Ghost', NamesOf(Issues), False,
+    'User is reached from the main body through UseLive');
+
+  // And the callback's answer is what classifies them.
+  Assert.IsTrue(FindIssue(Issues, 'Ghost', Issue), 'Ghost is reported');
+  Assert.AreEqual(Ord(uukInitCode), Ord(Issue.Kind),
+    'the initialization flag comes from the callback');
+  Assert.IsTrue(FindIssue(Issues, 'Dead', Issue), 'Dead is reported');
+  Assert.AreEqual(Ord(uukSafe), Ord(Issue.Kind), 'and so does its absence');
+
+  // A candidate the callback cannot read is listed, never dropped.
+  Issues := CollectUnusedProjectUnits(Units, Notes,
+    function (const AFile: string; out AHasInit: Boolean;
+      out AIdents: TArray<string>): Boolean
+    begin
+      AHasInit := False;
+      AIdents := nil;
+      Result := False;
+    end);
+  Assert.IsTrue(FindIssue(Issues, 'Dead', Issue), 'still listed');
+  Assert.AreEqual(Ord(uukUnreadable), Ord(Issue.Kind),
+    'a file the parser could not read is not a file without side effects');
 end;
 
 initialization

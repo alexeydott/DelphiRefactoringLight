@@ -185,7 +185,8 @@ begin
      (AName = 'extract_interface') or (AName = 'extract_method') or
      (AName = 'add_iinterface') or (AName = 'get_quick_fixes') or
      (AName = 'convert_properties') or (AName = 'expand_includes') or
-     (AName = 'edit_method') or (AName = 'line_endings') then
+     (AName = 'edit_method') or (AName = 'line_endings') or
+     (AName = 'unused_units') then
     Exit(twLong);
 
   // Reads, single-buffer edits and single LSP requests - the IDE answers

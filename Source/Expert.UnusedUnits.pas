@@ -80,6 +80,17 @@ type
     MainBody: string;
   end;
 
+  /// <summary>Fills the EXPENSIVE facts of one unit: its initialization
+  ///  section and the identifiers its interface declares. It is called
+  ///  only for units that no uses clause names, and that is why it
+  ///  exists: MEASURED with the production parser over a real project,
+  ///  one unit costs 15.7 ms, so asking for all 1822 of them would take
+  ///  half a minute while the ~119 candidates take two seconds. False =
+  ///  the unit could not be read after all.</summary>
+  TUnusedUnitDetails = reference to function(const AFile: string;
+    out AHasInitCode: Boolean;
+    out AExportedIdents: TArray<string>): Boolean;
+
   /// <summary>One reported unit.</summary>
   TUnusedUnitIssue = record
     UnitName: string;
@@ -109,9 +120,14 @@ function UnusedUnitKindText(AKind: TUnusedUnitKind): string;
 ///
 ///  ANotes receives what limits the answer: files that could not be read,
 ///  and whether the main body was available at all. A caller must show
-///  them - without them a short list looks like a complete one.</summary>
+///  them - without them a short list looks like a complete one.
+///
+///  ADetails (may be nil, and then the facts are taken as they arrive)
+///  supplies the initialization flag and the exported identifiers, and it
+///  is asked ONLY about units no uses clause names.</summary>
 function CollectUnusedProjectUnits(const AUnits: TArray<TUnitFacts>;
-  out ANotes: TArray<string>): TArray<TUnusedUnitIssue>;
+  out ANotes: TArray<string>;
+  const ADetails: TUnusedUnitDetails = nil): TArray<TUnusedUnitIssue>;
 
 implementation
 
@@ -148,7 +164,8 @@ begin
 end;
 
 function CollectUnusedProjectUnits(const AUnits: TArray<TUnitFacts>;
-  out ANotes: TArray<string>): TArray<TUnusedUnitIssue>;
+  out ANotes: TArray<string>;
+  const ADetails: TUnusedUnitDetails): TArray<TUnusedUnitIssue>;
 var
   Referenced: TDictionary<string, Boolean>;
   Notes, Unreadable: TStringList;
@@ -218,6 +235,27 @@ begin
           'was decided';
         Issues.Add(Issue);
         Continue;
+      end;
+
+      // Only HERE is the expensive half worth asking for - this unit is a
+      // candidate, and over a real project that is 119 of 1822 files.
+      if Assigned(ADetails) then
+      begin
+        var HasInit: Boolean;
+        var Idents: TArray<string>;
+        if ADetails(F.FileName, HasInit, Idents) then
+        begin
+          F.HasInitCode := HasInit;
+          F.ExportedIdents := Idents;
+        end
+        else
+        begin
+          Issue.Kind := uukUnreadable;
+          Issue.Reason := 'the file could not be read, so nothing about ' +
+            'it was decided';
+          Issues.Add(Issue);
+          Continue;
+        end;
       end;
 
       // Does the main source's body reach into this unit? That is how a
