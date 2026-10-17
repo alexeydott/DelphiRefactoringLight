@@ -1563,12 +1563,25 @@ const
     'TAggregatedObject', 'TContainedObject', 'TClassHelperBase',
     'TNoRefCountObject', 'TSingletonImplementation', 'TInterfacedPersistent',
     'TComponent', 'TInterfaceList', 'TStreamAdapter');
+  // SHORTCUTS, not independent facts: every one of these descends from
+  // TComponent (measured - Vcl.Controls "TControl = class(TComponent)",
+  // FMX.Types "TFmxObject = class(TComponent)"), so the chain walk would
+  // reach the same answer. It would do so by parsing Vcl.Forms and
+  // Vcl.Controls on the main thread, and it would answer "could not be
+  // determined" while the identifier index is still cold - which is
+  // exactly the moment someone opens a form and runs this.
+  Roots: array[0..10] of string = ('TControl', 'TWinControl',
+    'TCustomControl', 'TGraphicControl', 'TScrollingWinControl',
+    'TCustomForm', 'TForm', 'TFrame', 'TCustomFrame', 'TDataModule',
+    'TFmxObject');
 begin
   // An implicit base IS TObject ("TFoo = class").
   if Trim(ABaseClass) = '' then Exit(ibkTObjectLike);
   if SameText(ABaseClass, 'TObject') or SameText(ABaseClass, 'TPersistent') then
     Exit(ibkTObjectLike);
   for var N in Implementers do
+    if SameText(ABaseClass, N) then Exit(ibkImplements);
+  for var N in Roots do
     if SameText(ABaseClass, N) then Exit(ibkImplements);
   Result := ibkUnknown;
 end;

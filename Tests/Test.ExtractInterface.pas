@@ -379,8 +379,13 @@ begin
   Assert.IsTrue(V.Offer.Contains('TInterfacedObject'), 'and the offer: ' + V.Offer);
 
   // A base that implements it - measured in the RTL, not assumed.
+  // The last three are the VCL / FMX shortcuts: they descend from
+  // TComponent, and answering them WITHOUT the index keeps a form out of
+  // the warning while the identifier index is still cold - and keeps the
+  // dialog from parsing Vcl.Forms on the main thread to find that out.
   for var Base in ['TInterfacedObject', 'TComponent', 'TInterfacedPersistent',
-    'TAggregatedObject', 'TSingletonImplementation'] do
+    'TAggregatedObject', 'TSingletonImplementation', 'TForm', 'TControl',
+    'TFmxObject'] do
   begin
     V := Parse(['unit U;', 'interface', 'type',
       '  TMyClass = class(' + Base + ')', '    procedure A;', '  end;',
