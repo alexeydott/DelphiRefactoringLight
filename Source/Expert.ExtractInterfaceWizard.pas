@@ -1902,7 +1902,7 @@ var
   Lines: TArray<string>;
   Info: TExtractInterfaceInfo;
   DeclBlock, ImplBlock: string;
-  BaseIsTObjectLike, HasNewInst, HasAfterCtor: Boolean;
+  HasNewInst, HasAfterCtor: Boolean;
   BaseDesc, ExtraNote: string;
   InjectNewInstOK, InjectAfterCtorOK: Boolean;
 begin
@@ -1945,15 +1945,6 @@ begin
     Exit;
   end;
 
-  // Heuristic on base class. TObject / TPersistent have no virtual
-  // IInterface methods to override; everything else we treat as a
-  // TComponent descendant, where only QueryInterface is virtual:
-  // "override" on its static _AddRef/_Release does not compile (E2170).
-  // Users with an exotic base can adjust the generated `override`
-  // keywords by hand.
-  BaseIsTObjectLike := (BaseClass = '') or
-    SameText(BaseClass, 'TObject') or SameText(BaseClass, 'TPersistent');
-
   // Detect whether the class already declares NewInstance and/or
   // AfterConstruction. We must NOT re-declare them (would trip E2007),
   // and we must NOT re-emit fresh implementations - instead the
@@ -1963,23 +1954,10 @@ begin
   HasAfterCtor := TExtractInterfaceEngine.ClassHasMethodDecl(
     Lines, Info.ClassDeclLine, Info.ClassEndLine, 'AfterConstruction');
 
-  DeclBlock :=
-    '    FRefCount: Integer;' + sLineBreak +
-    '  protected' + sLineBreak +
-    '    function QueryInterface(const IID: TGUID; out Obj): HResult; ' +
-      TExtractInterfaceEngine.IInterfaceDirective(BaseClass, 'QueryInterface') + 'stdcall;' + sLineBreak +
-    '    function _AddRef: Integer; ' +
-      TExtractInterfaceEngine.IInterfaceDirective(BaseClass, '_AddRef') + 'stdcall;' + sLineBreak +
-    '    function _Release: Integer; ' +
-      TExtractInterfaceEngine.IInterfaceDirective(BaseClass, '_Release') + 'stdcall;';
-  if (not HasAfterCtor) or (not HasNewInst) then
-    DeclBlock := DeclBlock + sLineBreak + '  public';
-  if not HasAfterCtor then
-    DeclBlock := DeclBlock + sLineBreak +
-      '    procedure AfterConstruction; override;';
-  if not HasNewInst then
-    DeclBlock := DeclBlock + sLineBreak +
-      '    class function NewInstance: TObject; override;';
+  // The block brings its own `private` section and no `override` -
+  // BuildIInterfaceDeclBlock says why, and a test pins both.
+  DeclBlock := TExtractInterfaceEngine.BuildIInterfaceDeclBlock(
+    HasNewInst, HasAfterCtor);
 
   Lines := ReadSourceLines(Src);
 
@@ -2001,7 +1979,6 @@ begin
     var Buf: TStringList := TStringList.Create;
     try
       for I := 0 to Info.ClassEndLine - 2 do Buf.Add(Lines[I]);
-      Buf.Add('  private');
       for var BL in DeclBlock.Split([sLineBreak]) do Buf.Add(BL);
       for I := Info.ClassEndLine - 1 to High(Lines) do Buf.Add(Lines[I]);
       Lines := StringListToArray(Buf);
@@ -2105,13 +2082,10 @@ begin
 
   if not APreview then WriteSourceLines(Src, Lines);
 
-  if BaseIsTObjectLike then
-    BaseDesc := 'TObject-like base (' +
-      IfThen(BaseClass = '', 'TObject', BaseClass) +
-      ') - fresh IInterface implementation'
-  else
-    BaseDesc := 'TComponent-style base (' + BaseClass +
-      ') - overrides the inherited virtual QueryInterface';
+  // No `override`: nothing in this chain declares an IInterface method,
+  // or the command would have refused above.
+  BaseDesc := IfThen(BaseClass = '', 'TObject', BaseClass) +
+    ' provides no IInterface - a fresh implementation was added';
 
   ExtraNote := '';
   if HasNewInst then

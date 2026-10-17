@@ -43,9 +43,14 @@ type
     /// <summary>The class is found again from its old line after an
     ///  interface above it in the same unit was extended.</summary>
     [Test] procedure RelocateClass_AfterTheFileGrewAboveIt;
-    /// <summary>On a TComponent-style base only QueryInterface is virtual;
-    ///  "override" on _AddRef/_Release does not compile (E2170).</summary>
-    [Test] procedure IInterfaceDirective_OnlyQueryInterfaceOnComponents;
+    /// <summary>What "Add IInterface support to class" declares. The
+    ///  user ran it on a class derived from System.Classes' TRecall and
+    ///  got TWO compiler errors (2026-10-17): E2169, because the field
+    ///  was appended to an existing private section BEHIND its methods,
+    ///  and E2137, because the base is not literally TObject/TPersistent
+    ///  and the name-based guess therefore wrote "override" on a
+    ///  QueryInterface no ancestor declares.</summary>
+    [Test] procedure TheIInterfaceBlockCompilesOnAnyBase;
 
     /// <summary>Issue #44, the reported class verbatim. Two defects in one
     ///  shape: a WRAPPED parameter list was cut at the ';' inside it, so
@@ -211,15 +216,51 @@ begin
   Assert.AreEqual(8, EndLine);
 end;
 
-procedure TExtractInterfaceTests.IInterfaceDirective_OnlyQueryInterfaceOnComponents;
+procedure TExtractInterfaceTests.TheIInterfaceBlockCompilesOnAnyBase;
+var
+  Block: string;
 begin
-  Assert.AreEqual('override; ',
-    TExtractInterfaceEngine.IInterfaceDirective('TComponent', 'QueryInterface'), False);
-  Assert.AreEqual('', TExtractInterfaceEngine.IInterfaceDirective('TComponent', '_AddRef'), False,
-    '_AddRef is static in TComponent');
-  Assert.AreEqual('', TExtractInterfaceEngine.IInterfaceDirective('TComponent', '_Release'), False,
-    '_Release is static in TComponent');
-  Assert.AreEqual('', TExtractInterfaceEngine.IInterfaceDirective('TObject', 'QueryInterface'), False);
+  Block := TExtractInterfaceEngine.BuildIInterfaceDeclBlock(False, False);
+
+  // E2169: the block is spliced at the END of an existing private
+  // section, where a field may NOT follow methods - so it opens its own.
+  Assert.IsTrue(Block.StartsWith('  private' + sLineBreak),
+    'the field opens its own private section: ' + Block);
+  Assert.IsTrue(Pos('private', Block) < Pos('FRefCount', Block),
+    'and the field stands in it');
+
+  // E2137: no ancestor of a class that reaches this block declares an
+  // IInterface method - a base that does makes the verdict "satisfied"
+  // (or "partly by hand") and the command refuses before generating.
+  Assert.IsFalse(Block.Contains('HResult; override'),
+    'QueryInterface is a fresh implementation, not an override: ' + Block);
+  Assert.IsFalse(Block.Contains('_AddRef: Integer; override'),
+    '_AddRef likewise');
+  Assert.IsFalse(Block.Contains('_Release: Integer; override'),
+    '_Release likewise');
+  for var M in ['QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;',
+                '_AddRef: Integer; stdcall;',
+                '_Release: Integer; stdcall;'] do
+    Assert.IsTrue(Block.Contains(M), 'declared stdcall: ' + M);
+
+  // AfterConstruction / NewInstance ARE overrides - TObject declares
+  // both virtual - and they are left out when the class has them.
+  Assert.IsTrue(Block.Contains('procedure AfterConstruction; override;'),
+    'AfterConstruction overrides TObject''s');
+  Assert.IsTrue(Block.Contains('class function NewInstance: TObject; override;'),
+    'NewInstance too');
+
+  Block := TExtractInterfaceEngine.BuildIInterfaceDeclBlock(True, True);
+  Assert.IsFalse(Block.Contains('AfterConstruction'),
+    'a class that declares them keeps its own (E2007): ' + Block);
+  Assert.IsFalse(Block.Contains('NewInstance'), 'the same for NewInstance');
+  Assert.IsFalse(Block.Contains('public'),
+    'and then the block needs no public section at all');
+  Assert.IsTrue(Block.Contains('FRefCount'), 'the three methods still come');
+
+  Block := TExtractInterfaceEngine.BuildIInterfaceDeclBlock(True, False);
+  Assert.IsTrue(Block.Contains('AfterConstruction'), 'only the missing one');
+  Assert.IsFalse(Block.Contains('NewInstance'), 'not the one that is there');
 end;
 
 procedure TExtractInterfaceTests.ArrayPropertyKeepsItsIndexList_Issue46;

@@ -333,7 +333,26 @@ type
     ///  with base ABaseClass: 'override; ' where the base declares it
     ///  virtual, else ''. Only QueryInterface is virtual in TComponent;
     ///  its _AddRef and _Release are static (E2170 on override).</summary>
-    class function IInterfaceDirective(const ABaseClass, AMethodName: string): string;
+    /// <summary>The declarations "Add IInterface support to class"
+    ///  inserts into the class body, as ONE block. Two rules the compiler
+    ///  enforces, and both cost a live round (user, 2026-10-17, a class
+    ///  derived from TRecall):
+    ///  * it opens its OWN `private` section. The block is spliced at the
+    ///    END of an existing private section, and there a FIELD may not
+    ///    follow methods (E2169).
+    ///  * NO `override` on QueryInterface / _AddRef / _Release. This block
+    ///    is only ever generated when ALL THREE are missing from the whole
+    ///    ancestor chain: a base that declares them makes the verdict
+    ///    "satisfied" and the command refuse, one that declares some is
+    ///    refused as "partly by hand". So there is no inherited virtual
+    ///    method to override here - and `override` without one is E2137,
+    ///    which is exactly what the name-based guess produced for every
+    ///    base that was not literally TObject or TPersistent.
+    ///  AHASNEWINSTANCE / AHASAFTERCONSTRUCTION: the class declares it
+    ///  already, so it is not declared again (E2007) - the caller splices
+    ///  the refcount statement into the existing body.</summary>
+    class function BuildIInterfaceDeclBlock(
+      AHasNewInstance, AHasAfterConstruction: Boolean): string;
 
     /// <summary>What this unit knows about an RTL base class, measured in
     ///  the shipped sources rather than assumed. ibkUnknown for everything
@@ -1904,16 +1923,24 @@ begin
   Result := True;
 end;
 
-class function TExtractInterfaceEngine.IInterfaceDirective(
-  const ABaseClass, AMethodName: string): string;
+class function TExtractInterfaceEngine.BuildIInterfaceDeclBlock(
+  AHasNewInstance, AHasAfterConstruction: Boolean): string;
 begin
-  Result := '';
-  if (ABaseClass = '') or SameText(ABaseClass, 'TObject') or
-     SameText(ABaseClass, 'TPersistent') then Exit;
-  // TComponent-style base: QueryInterface is virtual, _AddRef/_Release
-  // are not
-  if SameText(AMethodName, 'QueryInterface') then
-    Result := 'override; ';
+  Result :=
+    '  private' + sLineBreak +
+    '    FRefCount: Integer;' + sLineBreak +
+    '  protected' + sLineBreak +
+    '    function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;' + sLineBreak +
+    '    function _AddRef: Integer; stdcall;' + sLineBreak +
+    '    function _Release: Integer; stdcall;';
+  if AHasNewInstance and AHasAfterConstruction then Exit;
+  Result := Result + sLineBreak + '  public';
+  if not AHasAfterConstruction then
+    Result := Result + sLineBreak +
+      '    procedure AfterConstruction; override;';
+  if not AHasNewInstance then
+    Result := Result + sLineBreak +
+      '    class function NewInstance: TObject; override;';
 end;
 
 { ---------- TProjectInterfaceScanner ---------- }
