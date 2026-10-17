@@ -1036,6 +1036,11 @@ const
     '\"iinterface\" says so and names what to pass here (usually ' +
     'TInterfacedObject), or points at add_iinterface when the ancestor must ' +
     'stay."},' +
+    '"add_iinterface":{"type":"boolean","description":"Add IInterface ' +
+    'support to the class ITSELF with the extraction - QueryInterface, ' +
+    '_AddRef, _Release and the reference counting go into the class and its ' +
+    'ancestor stays. The other half of what \"iinterface\" offers; use ' +
+    'this where change_base_to would drop a base class that matters."},' +
     ApplyProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
     '{"name":"add_iinterface","description":"Adds IInterface support to a class that ' +

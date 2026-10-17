@@ -64,7 +64,12 @@ type
     ///  nothing to report.</summary>
     FPnlIInterface: TPanel;
     FLblIInterface: TLabel;
-    FChkChangeBase: TCheckBox;
+    /// <summary>What to do about it - the two halves of the offer plus
+    ///  "nothing", because the plugin can carry both out itself (user,
+    ///  2026-10-17). Item 0 is always "leave it": a class that is held
+    ///  by a plain reference today must not become reference-counted
+    ///  behind the user's back.</summary>
+    FCmbIInterface: TComboBox;
 
     FBtnOk: TButton;
     FBtnCancel: TButton;
@@ -112,7 +117,7 @@ type
     procedure DoPresetProperties(Sender: TObject);
     procedure DoPresetFields(Sender: TObject);
     procedure DoPresetNone(Sender: TObject);
-    procedure DoChangeBaseClick(Sender: TObject);
+    procedure DoIInterfaceChoice(Sender: TObject);
     /// <summary>Fills the IInterface panel from FInfo.IInterface, which the
     ///  wizard filled before the dialog was built.</summary>
     procedure RefreshIInterfaceHint;
@@ -321,11 +326,12 @@ begin
   FLblIInterface.WordWrap := True;
   FLblIInterface.Anchors := [akLeft, akTop, akRight];
 
-  FChkChangeBase := TCheckBox.Create(Self);
-  FChkChangeBase.Parent := FPnlIInterface;
-  FChkChangeBase.SetBounds(Pad, 38, ClientWidth - 2 * Pad, 20);
-  FChkChangeBase.Anchors := [akLeft, akTop, akRight];
-  FChkChangeBase.OnClick := DoChangeBaseClick;
+  FCmbIInterface := TComboBox.Create(Self);
+  FCmbIInterface.Parent := FPnlIInterface;
+  FCmbIInterface.SetBounds(Pad, 36, ClientWidth - 2 * Pad, 24);
+  FCmbIInterface.Anchors := [akLeft, akTop, akRight];
+  FCmbIInterface.Style := csDropDownList;
+  FCmbIInterface.OnChange := DoIInterfaceChoice;
 
   var PnlBottom: TPanel := TPanel.Create(Self);
   PnlBottom.Parent := Self;
@@ -478,12 +484,18 @@ begin
   Result := NativeInt(Obj) - 1;
 end;
 
-procedure TExtractInterfaceDialog.DoChangeBaseClick(Sender: TObject);
+procedure TExtractInterfaceDialog.DoIInterfaceChoice(Sender: TObject);
 begin
-  if FChkChangeBase.Checked then
-    FInfo.ChangeBaseTo := FInfo.IInterface.SuggestedAncestor
-  else
-    FInfo.ChangeBaseTo := '';
+  FInfo.ChangeBaseTo := '';
+  FInfo.AddIInterface := False;
+  if FCmbIInterface = nil then Exit;
+  // The item's own OBJECT says what it means, so the order of the items
+  // and the two cases (with and without an ancestor suggestion) cannot
+  // disagree about what index 1 is.
+  case NativeInt(FCmbIInterface.Items.Objects[FCmbIInterface.ItemIndex]) of
+    1: FInfo.ChangeBaseTo := FInfo.IInterface.SuggestedAncestor;
+    2: FInfo.AddIInterface := True;
+  end;
 end;
 
 procedure TExtractInterfaceDialog.RefreshIInterfaceHint;
@@ -496,31 +508,28 @@ begin
     'This class cannot implement an interface as it stands: ' +
     FInfo.IInterface.Reason + '. The extracted interface is written either ' +
     'way, but the class will not compile until that is fixed.';
+  // BOTH halves of the offer are carried out by the extraction itself -
+  // naming a second command was the version before (user, 2026-10-17:
+  // "Wir koennen das doch direkt selbst machen").
+  FCmbIInterface.Items.Clear;
+  FCmbIInterface.Items.AddObject(
+    Format('Leave %s as it is - the interface will not compile with it yet',
+      [FInfo.ClassName]), TObject(0));
   if FInfo.IInterface.SuggestedAncestor <> '' then
-  begin
-    FChkChangeBase.Visible := True;
-    // DELIBERATELY NOT pre-ticked: TInterfacedObject reference-counts the
-    // instance, so an existing Free call becomes a double free. That is a
-    // second reading, and this project only pre-ticks what has none.
-    FChkChangeBase.Checked := False;
-    FChkChangeBase.Caption := Format('Derive %s from %s - it then frees ' +
-      'itself when the last interface reference drops, so explicit Free ' +
-      'calls have to go', [FInfo.ClassName, FInfo.IInterface.SuggestedAncestor]);
-  end
-  else
-  begin
-    FChkChangeBase.Visible := False;
-    // The label takes the checkbox's row: there is nothing to tick here,
-    // the offer is another command.
-    FLblIInterface.Height := 54;
-    // The offer is written as a clause, so it starts lowercase - here it
-    // begins a sentence of its own (seen in the headless render).
-    var Offer := FInfo.IInterface.Offer;
-    if Offer <> '' then Offer[1] := UpCase(Offer[1]);
-    FLblIInterface.Caption := FLblIInterface.Caption + ' ' + Offer +
-      ' ("Add IInterface support to class" in the Interfaces group does ' +
-      'exactly that).';
-  end;
+    FCmbIInterface.Items.AddObject(
+      Format('Derive it from %s - reference-counted, so the instance frees ' +
+        'itself when the last interface reference drops and explicit Free ' +
+        'calls have to go', [FInfo.IInterface.SuggestedAncestor]),
+      TObject(1));
+  FCmbIInterface.Items.AddObject(
+    Format('Add IInterface support to %s itself - QueryInterface, _AddRef, ' +
+      '_Release and the reference counting go into the class, its ancestor ' +
+      'stays', [FInfo.ClassName]), TObject(2));
+  // DELIBERATELY "leave it": both actions change how the instance is
+  // freed, which is a second reading, and this project does not preselect
+  // what has one.
+  FCmbIInterface.ItemIndex := 0;
+  DoIInterfaceChoice(nil);
 end;
 
 procedure TExtractInterfaceDialog.RefreshPreview;

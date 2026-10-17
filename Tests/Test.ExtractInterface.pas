@@ -82,6 +82,16 @@ type
     ///  schema does not list is dropped before the handler sees it, and
     ///  nobody is told (1.16.11).</summary>
     [Test] procedure TheExtractToolDeclaresTheAncestorChoice_Issue46;
+    /// <summary>User, 2026-10-17: "Wenn die Zielunit schon existiert,
+    ///  sollte das Interface dort hinzugefuegt und die benoetigten uses
+    ///  ergaenzt werden." Before that the only offer was to OVERWRITE the
+    ///  whole file.</summary>
+    [Test] procedure AnExistingTargetUnitIsExtended;
+    /// <summary>And the other half of the same round: an interface unit
+    ///  that names nothing but built-in types gets no uses clause at all,
+    ///  instead of the invented System.Classes + System.SysUtils - "mit
+    ///  Interfaces will man ja gerade entkoppeln".</summary>
+    [Test] procedure TheInterfaceUnitCarriesOnlyWhatItNeeds;
   end;
 
 implementation
@@ -508,6 +518,101 @@ begin
   Assert.IsTrue(Why.Contains('already'), Why);
 end;
 
+procedure TExtractInterfaceTests.AnExistingTargetUnitIsExtended;
+var
+  Target: TArray<string>;
+  NewLines: TArray<string>;
+  Why, Text: string;
+begin
+  Text := '  IOther = interface' + sLineBreak +
+          '    procedure Go;' + sLineBreak +
+          '  end;';
+
+  // A unit that already HOLDS an interface: the new one goes at the end
+  // of its type block and everything that was there stays.
+  Target := ['unit Interfaces.App;', '', 'interface', '', 'uses',
+    '  System.Classes;', '', 'type', '  IFirst = interface',
+    '    procedure Run;', '  end;', '', 'implementation', '', 'end.'];
+  Assert.IsTrue(PlanInterfaceIntoUnit(Target, 'IOther', Text, NewLines, Why),
+    Why);
+  var Joined := string.Join(sLineBreak, NewLines);
+  Assert.IsTrue(Joined.Contains('IFirst = interface'),
+    'what the unit had stays - it is extended, not replaced');
+  Assert.IsTrue(Joined.Contains('IOther = interface'), 'and the new one is in');
+  Assert.IsTrue(Pos('IFirst', Joined) < Pos('IOther', Joined),
+    'the new interface goes at the END of the type block');
+  Assert.IsTrue(Pos('IOther', Joined) < Pos('implementation', Joined),
+    'and still in the INTERFACE section');
+
+  // A unit without a type section gets one, after its uses clause.
+  Target := ['unit Interfaces.Bare;', '', 'interface', '', 'uses',
+    '  System.Classes,', '  System.SysUtils;', '', 'implementation', '',
+    'end.'];
+  Assert.IsTrue(PlanInterfaceIntoUnit(Target, 'IOther', Text, NewLines, Why),
+    Why);
+  Joined := string.Join(sLineBreak, NewLines);
+  Assert.IsTrue(Joined.Contains('type'), 'a type section is opened');
+  Assert.IsTrue(Pos('System.SysUtils;', Joined) < Pos('type', Joined),
+    'after the uses clause, which may wrap over lines');
+  Assert.IsTrue(Pos('type', Joined) < Pos('implementation', Joined),
+    'and before the implementation');
+
+  // The name is already there: splicing a second declaration of it is
+  // never what was meant.
+  Target := ['unit Interfaces.App;', '', 'interface', '', 'type',
+    '  IOther = interface', '    procedure Go;', '  end;', '',
+    'implementation', '', 'end.'];
+  Assert.IsFalse(PlanInterfaceIntoUnit(Target, 'IOther', Text, NewLines, Why),
+    'a second IOther is refused');
+  Assert.IsTrue(Why.Contains('already declares IOther'), Why);
+  Assert.IsTrue(Why.Contains('Add to existing interface'),
+    'and the refusal names the command that DOES extend it: ' + Why);
+
+  // A name inside a COMMENT is no declaration.
+  Target := ['unit Interfaces.App;', '', 'interface', '', 'type',
+    '  // IOther = interface - the old one', '  IFirst = interface',
+    '    procedure Run;', '  end;', '', 'implementation', '', 'end.'];
+  Assert.IsTrue(PlanInterfaceIntoUnit(Target, 'IOther', Text, NewLines, Why),
+    'a commented-out declaration does not block it: ' + Why);
+
+  // And a declaration in the IMPLEMENTATION section is another type.
+  Target := ['unit Interfaces.App;', '', 'interface', '', 'type',
+    '  IFirst = interface', '    procedure Run;', '  end;', '',
+    'implementation', '', 'type', '  IOther = interface', '  end;', '',
+    'end.'];
+  Assert.IsTrue(PlanInterfaceIntoUnit(Target, 'IOther', Text, NewLines, Why),
+    'only the interface section decides: ' + Why);
+end;
+
+procedure TExtractInterfaceTests.TheInterfaceUnitCarriesOnlyWhatItNeeds;
+var
+  Info: TExtractInterfaceInfo;
+begin
+  Assert.IsTrue(TExtractInterfaceEngine.ParseClassAtLine(
+    ['unit U;', 'interface', 'type', '  TMyClass = class', '  public',
+     '    procedure Run(const AName: string);', '  end;', 'implementation',
+     'end.'], '', 4, Info), 'the fixture parses');
+  Info.InterfaceName := 'IMyClass';
+  Info.Guid := '{11111111-2222-3333-4444-555555555555}';
+  Info.TargetFile := 'C:\temp\IMyClass.pas';
+  for var I := 0 to High(Info.Members) do
+    Info.Members[I].Selected := Info.Members[I].Name = 'Run';
+
+  Info.NewUnitUses := nil;
+  var Text := TExtractInterfaceEngine.BuildNewUnitText(Info);
+  Assert.IsFalse(Text.Contains('uses'),
+    'nothing but built-in types: no uses clause at all, and above all no ' +
+    'invented System.Classes / System.SysUtils');
+  Assert.IsTrue(Text.Contains('IMyClass = interface'), 'the interface is in');
+
+  // With units they are written, one clause.
+  Info.NewUnitUses := ['System.Classes', 'Vcl.Controls'];
+  Text := TExtractInterfaceEngine.BuildNewUnitText(Info);
+  Assert.IsTrue(Text.Contains('uses'), 'and with units it has a clause');
+  Assert.IsTrue(Text.Contains('System.Classes, Vcl.Controls;'),
+    'with exactly those: ' + Text);
+end;
+
 procedure TExtractInterfaceTests.TheExtractToolDeclaresTheAncestorChoice_Issue46;
 var
   Args: TArray<string>;
@@ -524,7 +629,8 @@ begin
   Assert.IsTrue(Length(Args) > 0, 'the tool is in the shipped definitions');
   // Exactly what ToolExtractInterface reads.
   for var Needed in ['file', 'line', 'interface_name', 'target_file',
-    'members', 'add_to_existing', 'change_base_to', 'apply'] do
+    'members', 'add_to_existing', 'change_base_to', 'add_iinterface',
+    'apply'] do
     Assert.IsTrue(Declares(Needed), Needed + ' is declared');
 end;
 

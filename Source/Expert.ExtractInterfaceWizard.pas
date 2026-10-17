@@ -61,12 +61,14 @@ function DelegateIInterfaceHeadless(const AFile: string; ALine1: Integer;
 ///  ACHANGEBASETO is a base class to derive from instead, applied with the
 ///  extraction - AInfo.IInterface suggests one when the class cannot carry
 ///  an interface as it stands (issue #46); '' leaves the ancestor alone.
+///  AADDIINTERFACE is the other half of that offer: QueryInterface /
+///  _AddRef / _Release go into the CLASS, its ancestor stays.
 ///  MAIN THREAD.</summary>
 function ExtractInterfaceHeadless(const AFile: string; ALine1: Integer;
   AAddToExisting: Boolean; const AInterfaceName, ATargetFile: string;
   const AMembers: TArray<string>; APreview: Boolean;
   out AInfo: TExtractInterfaceInfo; out AInterfaceText, AError: string;
-  const AChangeBaseTo: string = ''): Boolean;
+  const AChangeBaseTo: string = ''; AAddIInterface: Boolean = False): Boolean;
 
 implementation
 
@@ -79,6 +81,8 @@ uses
   Expert.EditorHelperIntf, Expert.ExtractInterfaceDialog,   // engine: interface uses
   Expert.DialogHelper, Expert.LspManager, Lsp.Client, Lsp.Uri, Lsp.Protocol,
   Expert.InterfaceLinks, Expert.ScopeFiles,
+  Expert.MethodEdit, Expert.UnitIndex,   // the units the interface needs
+  Expert.UsesEditor,   // the existing target gets what it needs
   Delphi.FileEncoding, Expert.PascalScanner;
 
 function StringListToArray(ASL: TStringList): TArray<string>;
@@ -225,6 +229,13 @@ type
     TypesResolved: Integer;
     LspAvailable: Boolean;
     LspError: string;
+    /// <summary>The target unit was there and got the interface ADDED -
+    /// the message says which of the two happened.</summary>
+    ExtendedExisting: Boolean;
+    /// <summary>Units the interface needs that could not be added to an
+    /// existing target's uses clause (a conditional clause, say). Named
+    /// rather than written in silence.</summary>
+    UnresolvedNote: string;
   end;
 
 type
@@ -236,6 +247,45 @@ type
     ///  walking the whole file.</summary>
     SourceLine: Integer;
   end;
+
+/// <summary>The units the INTERFACE TEXT itself needs, for what DelphiLSP
+///  could not resolve: every identifier of the generated interface is
+///  looked up in the identifier index, and a unit is only named when the
+///  SOURCE unit's own uses clause has it - the class compiled there, so
+///  that is where its types come from. The same rule the method move
+///  follows (1.21.0).
+///  WHY, user 2026-10-17: "In der Interfaceunit sind alle Units in der
+///  uses kopiert. Dabei will man mit Interfaces ja gerade entkoppeln." The
+///  fallback used to be the source's WHOLE interface-uses clause, which is
+///  exactly the coupling an extracted interface is meant to remove.</summary>
+function UnitsTheInterfaceNeeds(const AInfo: TExtractInterfaceInfo;
+  const ASoFar: TArray<string>; out AIdents: TArray<string>): TArray<string>;
+var
+  Info: TExtractInterfaceInfo;
+  Snap: IUnitSnapshot;
+begin
+  Result := nil;
+  AIdents := nil;
+  Snap := TUnitIndex.Instance.Snapshot;
+  if Snap = nil then Exit;
+  Info := AInfo;
+  Info.NewUnitUses := ASoFar;
+  Result := UnitsMovedCodeNeeds(
+    ReadSourceLines(AInfo.SourceFile),
+    SplitEditorLines(TExtractInterfaceEngine.BuildNewUnitText(Info)),
+    SplitEditorLines(TExtractInterfaceEngine.BuildInterfaceText(Info)),
+    function(const AIdent: string): TArray<string>
+    begin
+      Result := nil;
+      for var H in Snap.Lookup(AIdent) do
+      begin
+        var Known := False;
+        for var U in Result do
+          if SameText(U, H.UnitName) then Known := True;
+        if not Known then Result := Result + [H.UnitName];
+      end;
+    end, AIdents);
+end;
 
 function ResolveUsesViaLsp(const ASourceFile: string;
   const AMembers: TArray<TClassMember>;
@@ -1003,6 +1053,31 @@ begin
   end;
 end;
 
+/// <summary>Carries out the "add IInterface support" half of the offer,
+///  after the extraction has been written. It parses the class out of the
+///  FILE, so it runs last and finds the class again BY NAME - the
+///  extraction moved its line. A failure raises: the interface is on disk
+///  by then, and saying nothing would leave a class that does not
+///  compile.</summary>
+procedure AddIInterfaceSupportIfAsked(const AInfo: TExtractInterfaceInfo);
+var
+  Lines: TArray<string>;
+  DeclLine, EndLine: Integer;
+  Report, Error: string;
+begin
+  if not AInfo.AddIInterface then Exit;
+  Lines := ReadSourceLines(AInfo.SourceFile);
+  if not TExtractInterfaceEngine.RelocateClass(Lines, AInfo.ClassName,
+    AInfo.ClassDeclLine, DeclLine, EndLine) then
+    raise Exception.CreateFmt('The interface was written, but %s could not ' +
+      'be found again - IInterface support was NOT added. Use "Add ' +
+      'IInterface support to class" on it.', [AInfo.ClassName]);
+  if not DelegateIInterfaceHeadless(AInfo.SourceFile, DeclLine, False,
+    Report, Error) then
+    raise Exception.CreateFmt('The interface was written, but IInterface ' +
+      'support could not be added: %s', [Error]);
+end;
+
 procedure ApplyExtractNew(const AInfo: TExtractInterfaceInfo;
   out AStats: TResolveUsesStats; AStatusCallback: TProc<string>);
 var
@@ -1012,10 +1087,6 @@ var
   Lines: TArray<string>;
 begin
   AStats := Default(TResolveUsesStats);
-  if TFile.Exists(AInfo.TargetFile) then
-    if MessageDlg('Target file already exists. Overwrite?' + sLineBreak +
-        AInfo.TargetFile, mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
-      Exit;
 
   // 1. Create the new interface unit on disk, register it with the
   //    active project and open it in the IDE so the user can see it.
@@ -1030,25 +1101,56 @@ begin
     // full interface-uses when LSP delivers nothing.
     InfoWithUses.NewUnitUses := ResolveUsesViaLsp(AInfo.SourceFile, AInfo.Members,
       AStatusCallback, AStats);
-    // Safety net: if LSP did not (or could not) resolve every type we
-    // collected, top off the uses with the source unit's own
-    // interface-uses. The list stays minimal when LSP resolved
-    // everything, but does not leave the new unit uncompilable when
-    // resolution was partial (e.g. because the source still has its
-    // own uses-issue that prevents LSP from resolving from its
-    // perspective).
+    // What LSP could not resolve is looked up by IDENTIFIER instead -
+    // NOT by copying the source's whole uses clause, which is the
+    // coupling the extraction exists to remove (user, 2026-10-17).
     if (not AStats.LspAvailable) or
        (AStats.TypesResolved < AStats.TypesAttempted) then
+    begin
+      var Idents: TArray<string>;
       InfoWithUses.NewUnitUses := UnionUnitNames(
         InfoWithUses.NewUnitUses,
-        ExtractInterfaceUses(AInfo.SourceFile));
-    UnitText := TExtractInterfaceEngine.BuildNewUnitText(InfoWithUses);
+        UnitsTheInterfaceNeeds(InfoWithUses, InfoWithUses.NewUnitUses,
+          Idents));
+    end;
+    // An EXISTING target unit is EXTENDED, not replaced (user,
+    // 2026-10-17). Overwriting it is what the version before offered,
+    // and a unit that already holds interfaces is exactly where the next
+    // one belongs.
+    if TFile.Exists(AInfo.TargetFile) then
+    begin
+      var Existing := ReadSourceLines(AInfo.TargetFile);
+      var Why: string;
+      var NewLines: TArray<string>;
+      if not PlanInterfaceIntoUnit(Existing,
+        InfoWithUses.InterfaceName,
+        TExtractInterfaceEngine.BuildInterfaceText(InfoWithUses),
+        NewLines, Why) then
+        raise Exception.CreateFmt('Nothing was written: %s.', [Why]);
+      // Its OWN uses clause gets what the new interface needs - the same
+      // list the new unit would have carried.
+      var Content := string.Join(sLineBreak, NewLines);
+      for var U in InfoWithUses.NewUnitUses do
+      begin
+        var WithUse: string;
+        if PlanAddUnitToUsesText(Content, U, usInterface, WithUse) then
+          Content := WithUse
+        else
+          AStats.UnresolvedNote := AStats.UnresolvedNote +
+            IfThen(AStats.UnresolvedNote = '', '', ', ') + U;
+      end;
+      WriteTextEnc(AInfo.TargetFile, Content);
+      AStats.ExtendedExisting := True;
+      UnitText := '';
+    end
+    else
+      UnitText := TExtractInterfaceEngine.BuildNewUnitText(InfoWithUses);
   end;
   // The new unit is written, but it is NOT handed to the project yet
   // (audit #39, L7h): the source edit below can fail - a read-only file,
   // a refused editor write - and the project then held an interface unit
   // for an extraction that never happened. Both steps happen at the end.
-  WriteTextEnc(AInfo.TargetFile, UnitText);
+  if UnitText <> '' then WriteTextEnc(AInfo.TargetFile, UnitText);
 
   UnitName := ChangeFileExt(ExtractFileName(AInfo.TargetFile), '');
 
@@ -1086,6 +1188,7 @@ begin
   // a file nobody added to the project is harmless - but the project is
   // not changed behind a failure.
   WriteSourceLines(AInfo.SourceFile, Lines);
+  AddIInterfaceSupportIfAsked(AInfo);
   AddFileToActiveProject(AInfo.TargetFile);
   OpenModuleInIDE(AInfo.TargetFile);
 end;
@@ -1261,6 +1364,7 @@ begin
           ChangeFileExt(ExtractFileName(Target.FileName), ''));
     end;
     WriteSourceLines(AInfo.SourceFile, SrcLines);
+    AddIInterfaceSupportIfAsked(AInfo);
     Exit;
   end;
 
@@ -1379,7 +1483,7 @@ function ExtractInterfaceHeadless(const AFile: string; ALine1: Integer;
   AAddToExisting: Boolean; const AInterfaceName, ATargetFile: string;
   const AMembers: TArray<string>; APreview: Boolean;
   out AInfo: TExtractInterfaceInfo; out AInterfaceText, AError: string;
-  const AChangeBaseTo: string): Boolean;
+  const AChangeBaseTo: string; AAddIInterface: Boolean): Boolean;
 var
   Lines: TArray<string>;
   Info: TExtractInterfaceInfo;
@@ -1413,6 +1517,7 @@ begin
   // the answer, not something the caller finds out from the compiler.
   FillIInterfaceVerdict(Lines, Info);
   Info.ChangeBaseTo := AChangeBaseTo;
+  Info.AddIInterface := AAddIInterface;
   if AAddToExisting then Info.Mode := eimAddToExisting
   else Info.Mode := eimExtractNew;
 
@@ -1604,7 +1709,8 @@ begin
     if not Stats.LspAvailable then
       Diag := Diag + '  - LSP client could not be acquired (' +
         IfThen(Stats.LspError = '', LspConfigMissingHint, Stats.LspError) + ').' + sLineBreak +
-        '  - Fell back to the source unit''s full interface-uses.'
+        '  - The units were derived from the interface''s own ' +
+        'identifiers instead.'
     else
       Diag := Diag + Format(
         '  - %d distinct type(s) collected from selected members.' + sLineBreak +
@@ -1613,8 +1719,13 @@ begin
         [Stats.TypesAttempted, Stats.TypesResolved,
          Stats.TypesAttempted - Stats.TypesResolved]);
 
+    if Stats.UnresolvedNote <> '' then
+      Diag := Diag + sLineBreak + sLineBreak + 'Not added to the target''s ' +
+        'uses clause (add them by hand): ' + Stats.UnresolvedNote + '.';
     ShowThemedMessage('Interface ' +
-      IfThen(AMode = eimExtractNew, 'extracted to ' + Result_.TargetFile,
+      IfThen(AMode = eimExtractNew,
+        IfThen(Stats.ExtendedExisting, 'added to the existing unit ',
+          'extracted to ') + Result_.TargetFile,
                                      'extended in ' + Result_.ExistingFile)
       + '.' + Diag);
   except

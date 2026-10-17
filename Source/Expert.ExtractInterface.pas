@@ -207,6 +207,12 @@ type
     ///  would otherwise become the first entry this replaces). '' = leave
     ///  the ancestor alone.</summary>
     ChangeBaseTo: string;
+    /// <summary>Run "Add IInterface support to class" with the extraction:
+    ///  QueryInterface / _AddRef / _Release and the reference counting go
+    ///  into the class ITSELF. The other half of the same offer, for a
+    ///  class whose ancestor has to stay (user, 2026-10-17: "Wir koennen
+    ///  das doch direkt selbst machen").</summary>
+    AddIInterface: Boolean;
   end;
 
   TExtractInterfaceEngine = class
@@ -380,6 +386,20 @@ type
     class function ScanProject(const AFiles: TArray<string>): TArray<TInterfaceDeclLocation>;
   end;
 
+/// <summary>ATARGETLINES with AINTERFACETEXT added to the END of its
+///  interface section's type block - a new "type" section is opened before
+///  the first declaration when there is none. The unit keeps everything it
+///  already has (user, 2026-10-17: "Wenn die Zielunit schon existiert,
+///  sollte das Interface dort hinzugefuegt werden" - the version before
+///  asked whether to OVERWRITE the whole file).
+///  REFUSED when the unit already declares AINTERFACENAME: splicing a
+///  second declaration of the same name is never what was meant, and
+///  extending the one that is there is what "Add to existing interface"
+///  does. False + AWHY, so the caller can say which it is.</summary>
+function PlanInterfaceIntoUnit(const ATargetLines: TArray<string>;
+  const AInterfaceName, AInterfaceText: string;
+  out ANewLines: TArray<string>; out AWhy: string): Boolean;
+
 /// <summary>The name of a synthesised accessor for the member exposed as
 ///  AExposedName: APrefix ('Get' / 'Set') plus the name WITHOUT its '&'
 ///  escape. The property itself KEEPS the escape - the bare word is the
@@ -413,11 +433,96 @@ procedure PropertyAccessors(const ASignature: string; out ARead, AWrite: string)
 implementation
 
 uses
-  System.StrUtils, System.Character, System.Math, Winapi.ActiveX, Winapi.Windows, Expert.PascalScanner;
+  System.StrUtils, System.Character, System.Math, Winapi.ActiveX, Winapi.Windows,
+  Expert.PascalScanner, Expert.AutoImport;   // UnitSectionEnd / SplitContentLines
 
 function AccessorName(const APrefix, AExposedName: string): string;
 begin
   Result := APrefix + UnescapedIdentifier(AExposedName);
+end;
+
+// Does ALINE declare a type of that name - "IFoo = interface", "IFoo =
+// class", "IFoo = interface;"? The name must be the whole first token.
+function DeclaresTypeNamed(const ALine, AName: string): Boolean;
+var
+  T: string;
+  P: Integer;
+begin
+  Result := False;
+  T := Trim(ALine);
+  if not StartsText(AName, T) then Exit;
+  P := Length(AName) + 1;
+  if (P <= Length(T)) and IsIdentChar(T[P]) then Exit;
+  T := Trim(Copy(T, P, MaxInt));
+  Result := StartsStr('=', T);
+end;
+
+function PlanInterfaceIntoUnit(const ATargetLines: TArray<string>;
+  const AInterfaceName, AInterfaceText: string;
+  out ANewLines: TArray<string>; out AWhy: string): Boolean;
+var
+  Masked: TArray<string>;
+  IntfLine, ImplLine, I, InsertAt: Integer;
+  Upper: string;
+  NewBlock: TArray<string>;
+begin
+  Result := False;
+  ANewLines := ATargetLines;
+  AWhy := '';
+  if (Length(ATargetLines) = 0) or (Trim(AInterfaceText) = '') then
+  begin
+    AWhy := 'the target unit could not be read';
+    Exit;
+  end;
+
+  // Comments and strings blanked: a type of that name inside a comment is
+  // not a declaration, and neither is one in the implementation section.
+  Masked := MaskCommentsAndStrings(ATargetLines);
+  IntfLine := -1;
+  ImplLine := Length(Masked);
+  for I := 0 to High(Masked) do
+  begin
+    Upper := UpperCase(Trim(Masked[I]));
+    if (IntfLine < 0) and (Upper = 'INTERFACE') then IntfLine := I
+    else if Upper = 'IMPLEMENTATION' then
+    begin
+      ImplLine := I;
+      Break;
+    end;
+  end;
+  if IntfLine < 0 then
+  begin
+    AWhy := 'the target unit has no interface section';
+    Exit;
+  end;
+
+  for I := IntfLine to ImplLine - 1 do
+    if DeclaresTypeNamed(Masked[I], AInterfaceName) then
+    begin
+      AWhy := Format('the target unit already declares %s (line %d) - use ' +
+        '"Add to existing interface" to extend that one',
+        [AInterfaceName, I + 1]);
+      Exit;
+    end;
+
+  // The END of the interface section's type block, or - when it has none -
+  // before its first declaration.
+  InsertAt := UnitSectionEnd(ATargetLines, 'type', IntfLine, ImplLine - 1);
+  if InsertAt >= 0 then
+  begin
+    NewBlock := [''] + SplitContentLines(AInterfaceText);
+    Inc(InsertAt);
+  end
+  else
+  begin
+    InsertAt := UnitSectionAnchor(ATargetLines, IntfLine + 1, ImplLine - 1);
+    NewBlock := [''] + ['type'] + SplitContentLines(AInterfaceText);
+  end;
+  if InsertAt > ImplLine then InsertAt := ImplLine;
+
+  ANewLines := Copy(ATargetLines, 0, InsertAt) + NewBlock +
+    Copy(ATargetLines, InsertAt, Length(ATargetLines) - InsertAt);
+  Result := True;
 end;
 
 function PropertyTypeName(const ASignature: string): string;
@@ -1133,9 +1238,13 @@ begin
   try
     SB.Append('unit ').Append(UName).Append(';').AppendLine.AppendLine;
     SB.Append('interface').AppendLine.AppendLine;
-    SB.Append('uses').AppendLine;
+    // An interface that names nothing but built-in types needs NO uses
+    // clause, and inventing one is the opposite of what an interface unit
+    // is for (user, 2026-10-17). The old else-branch guessed
+    // System.Classes + System.SysUtils.
     if Length(AInfo.NewUnitUses) > 0 then
     begin
+      SB.Append('uses').AppendLine;
       // Emit comma-separated on one or more wrapped lines (Delphi
       // convention) instead of one-unit-per-line. Wrap when the
       // current line would exceed ~75 chars including the trailing
@@ -1157,10 +1266,8 @@ begin
       end;
       if Length(Line) > 2 then
         SB.Append(TrimRight(Line)).AppendLine;
-    end
-    else
-      SB.Append('  System.Classes, System.SysUtils;').AppendLine;
-    SB.AppendLine;
+      SB.AppendLine;
+    end;
     SB.Append('type').AppendLine;
     SB.Append(BuildInterfaceText(AInfo)).AppendLine.AppendLine;
     SB.Append('implementation').AppendLine.AppendLine;

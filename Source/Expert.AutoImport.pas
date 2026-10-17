@@ -441,6 +441,21 @@ function EnclosingContainerName(const ALines: TArray<string>; ALine0: Integer): 
 function HasWholeWordCI(const S, AWord: string): Boolean;
 /// <summary>0-based line an implementation block goes BEFORE: the
 ///  initialization/finalization keyword, else the final 'end.'; -1 for a
+/// <summary>The last line of the top-level section AKEYWORD ('type',
+///  'const', ...) inside [AFROM, ATO], or -1. A section ends at the next
+///  top-level keyword. Lives here with the other "where does a declaration
+///  go" helpers, because three features ask it now: declare-as-constant,
+///  and the extraction when its target unit already exists.</summary>
+function UnitSectionEnd(const ALines: TArray<string>; const AKeyword: string;
+  AFrom, ATo: Integer): Integer;
+
+/// <summary>Where a NEW top-level section goes in [AFROM, ATO]: before the
+///  first type / var / routine, and after the section's own uses clause.
+///  That is also where a constant must stand when a type below it uses
+///  it.</summary>
+function UnitSectionAnchor(const ALines: TArray<string>;
+  AFrom, ATo: Integer): Integer;
+
 ///  file without implementation section.</summary>
 function ImplInsertLine(const ALines: TArray<string>): Integer;
 
@@ -6350,6 +6365,93 @@ begin
     Dlg.ShowModal;
   finally
     Dlg.Free;
+  end;
+end;
+
+// The last line of the top-level section AKeyword inside [AFrom, ATo], or
+// -1. A section ends at the next top-level keyword.
+function UnitSectionEnd(const ALines: TArray<string>; const AKeyword: string;
+  AFrom, ATo: Integer): Integer;
+const
+  Enders: array[0..12] of string = ('TYPE', 'CONST', 'VAR', 'RESOURCESTRING',
+    'THREADVAR', 'PROCEDURE', 'FUNCTION', 'CLASS', 'IMPLEMENTATION',
+    'INTERFACE', 'INITIALIZATION', 'FINALIZATION', 'END.');
+var
+  I, J, Last: Integer;
+  T, U: string;
+
+  function TopLevel(ALine: Integer): Boolean;
+  begin
+    Result := Length(ALines[ALine]) - Length(TrimLeft(ALines[ALine])) <= 2;
+  end;
+
+  function StartsAnother(const AUpper: string): Boolean;
+  var
+    E: string;
+  begin
+    for E in Enders do
+      if (AUpper = E) or AUpper.StartsWith(E + ' ') then Exit(True);
+    Result := False;
+  end;
+
+begin
+  Result := -1;
+  for I := Max(0, AFrom) to Min(High(ALines), ATo) do
+  begin
+    T := Trim(StripLineComment(ALines[I]));
+    U := UpperCase(T);
+    if not TopLevel(I) then Continue;
+    if (U = UpperCase(AKeyword)) or U.StartsWith(UpperCase(AKeyword) + ' ') then
+    begin
+      // walk to the end of THIS section
+      Last := I;
+      for J := I + 1 to Min(High(ALines), ATo) do
+      begin
+        T := Trim(StripLineComment(ALines[J]));
+        U := UpperCase(T);
+        if (T <> '') and TopLevel(J) and StartsAnother(U) then Break;
+        if T <> '' then Last := J;
+      end;
+      Result := Last;
+    end;
+  end;
+end;
+
+// Where a NEW top-level section goes in [AFrom, ATo]: before the first
+// type / var / routine, which is also where a constant must stand when a
+// type below it uses it.
+function UnitSectionAnchor(const ALines: TArray<string>; AFrom,
+  ATo: Integer): Integer;
+var
+  I, Stop: Integer;
+  T, U: string;
+begin
+  Stop := Min(High(ALines), ATo);
+  Result := Min(High(ALines) + 1, Max(0, AFrom));
+  I := Max(0, AFrom);
+  while I <= Stop do
+  begin
+    T := Trim(StripLineComment(ALines[I]));
+    U := UpperCase(T);
+    if T = '' then
+    begin
+      Inc(I);
+      Continue;
+    end;
+    // skip the section's own uses clause - it may wrap over lines
+    if U.StartsWith('USES') then
+    begin
+      while (I <= Stop) and (Pos(';', StripLineComment(ALines[I])) = 0) do Inc(I);
+      Inc(I);
+      Result := I;
+      Continue;
+    end;
+    if (U = 'TYPE') or U.StartsWith('TYPE ') or (U = 'VAR') or U.StartsWith('VAR ')
+      or (U = 'CONST') or U.StartsWith('CONST ') or (U = 'RESOURCESTRING')
+      or U.StartsWith('PROCEDURE ') or U.StartsWith('FUNCTION ')
+      or U.StartsWith('CLASS ') or (U = 'IMPLEMENTATION') or (U = 'END.') then
+      Exit(I);
+    Inc(I);
   end;
 end;
 

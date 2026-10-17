@@ -3649,7 +3649,7 @@ var
   F, IntfName, Target, Err, RunErr, Text, NewBase: string;
   L1: Integer;
   Members: TArray<string>;
-  AddExisting, DoApply, Ok: Boolean;
+  AddExisting, DoApply, Ok, AddIIntf: Boolean;
   Info: TExtractInterfaceInfo;
 begin
   F := ArgStr(AArgs, 'file');
@@ -3663,17 +3663,21 @@ begin
   AddExisting := ArgBool(AArgs, 'add_to_existing');
   DoApply := ArgBool(AArgs, 'apply');
   NewBase := Trim(ArgStr(AArgs, 'change_base_to'));
+  AddIIntf := ArgBool(AArgs, 'add_iinterface');
   Members := nil;
   var MArr := AArgs.GetValue<TJSONArray>('members', nil);
   if MArr <> nil then
     for var V in MArr do Members := Members + [Trim(V.Value)];
   Ok := False;
   RunErr := '';
+  // Asked BEFORE the call: a target that was already there is EXTENDED
+  // now (user, 2026-10-17), and the answer should say which happened.
+  var TargetExisted := (Target <> '') and TFile.Exists(ExpandFileName(Target));
   if not McpRunOnMain(
     procedure
     begin
       Ok := ExtractInterfaceHeadless(F, L1, AddExisting, IntfName, Target,
-        Members, not DoApply, Info, Text, RunErr, NewBase);
+        Members, not DoApply, Info, Text, RunErr, NewBase, AddIIntf);
     end, not DoApply, AStop, Err, 300000) then Exit(McpErr(Err));
   if not Ok then Exit(McpErr(RunErr));
   var Sel := TJSONArray.Create;
@@ -3714,10 +3718,15 @@ begin
     end;
     if NewBase <> '' then
       II.AddPair('changedBaseTo', NewBase);
+    if AddIIntf then
+      II.AddPair('addedSupport', TJSONBool.Create(True));
     Res.AddPair('iinterface', II);
   end;
   if DoApply then
-    Res.AddPair('note', 'The interface was written, the class got it in its ' +
+    Res.AddPair('note', IfThen(TargetExisted and not AddExisting,
+      'The target unit already existed, so the interface was ADDED to it ' +
+      'and its uses clause topped up - nothing of it was replaced. ', '') +
+      'The interface was written, the class got it in its ' +
       'ancestor list and the uses clauses were updated. Files open in the IDE ' +
       'were changed in the buffer (not saved).' +
       IfThen(not Info.IInterface.Ok,
