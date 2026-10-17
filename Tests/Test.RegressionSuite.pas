@@ -124,6 +124,13 @@ type
     ///  in exactly the case where the install had worked and only a new
     ///  session was missing; the user followed it twice.</summary>
     [Test] procedure AnAsideExeNamesTheInstallThatReplacedIt;
+    /// <summary>User, 2026-10-17: "Kannst du der MCP Bridge nicht eine
+    ///  Neustartfunktion verpassen, wenn die neue Exe da liegt, aber noch
+    ///  die alte umbenannte Version geladen ist? inklusive loeschen der
+    ///  alten Version." The decision and the cleanup rule; the hand-over
+    ///  itself needs two processes and real pipes and is measured by
+    ///  scratchpad relaunch\probe.ps1.</summary>
+    [Test] procedure AReplacedBridgeHandsOverAndTidiesUp;
     [Test] procedure BridgeVersion_ReachesTheServerOverARealPipe;
     /// <summary>Audit #22, H4: Stop waited 5 s for the handlers and then
     ///  returned as if all was well, so the owner freed the server (and the
@@ -1290,6 +1297,51 @@ begin
   Assert.AreEqual('', BridgeVersionOfRequest('{"method":"context"}'));
   Assert.AreEqual('{"method":"context"}',
     StampBridgeVersion('{"method":"context"}', ''), 'no version, no stamp');
+end;
+
+procedure TMcpPipeRegressionTests.AReplacedBridgeHandsOverAndTidiesUp;
+const
+  Aside = 'C:\x\mcp\RefactoringLightMcp.exe.208982825.old';
+  Canon = 'C:\x\mcp\RefactoringLightMcp.exe';
+var
+  Plan: TBridgeRelaunch;
+  Everything, Nothing: TFunc<string, Boolean>;
+begin
+  Everything := function(APath: string): Boolean begin Result := True; end;
+  Nothing := function(APath: string): Boolean begin Result := False; end;
+
+  // The normal case - this IS the installed exe, nothing to do.
+  Plan := PlanBridgeRelaunch(Canon, Everything, False);
+  Assert.IsFalse(Plan.Wanted, 'the installed exe never hands over');
+  Assert.AreEqual('', Plan.NewExe, False);
+  Assert.IsTrue(Plan.Reason.Contains('installed exe'), Plan.Reason);
+
+  // An install moved us aside and wrote the new one: hand over.
+  Plan := PlanBridgeRelaunch(Aside, Everything, False);
+  Assert.IsTrue(Plan.Wanted, 'an aside image hands over: ' + Plan.Reason);
+  Assert.AreEqual(Canon, Plan.NewExe, False);
+
+  // ...but only when the successor is really there. A packaged host
+  // redirects %LOCALAPPDATA%, so the aside copy can sit in a view the
+  // install never wrote to (1.22.3) - then there is nothing to hand to.
+  Plan := PlanBridgeRelaunch(Aside, Nothing, False);
+  Assert.IsFalse(Plan.Wanted, 'no successor, no hand-over');
+  Assert.AreEqual('', Plan.NewExe, False, 'and no path is invented');
+  Assert.IsTrue(Plan.Reason.Contains('not there'), Plan.Reason);
+
+  // The successor ALWAYS gets --no-relaunch, so a loop is impossible even
+  // if an install ever produced an aside name twice.
+  Plan := PlanBridgeRelaunch(Aside, Everything, True);
+  Assert.IsFalse(Plan.Wanted, 'suppressed: serve from here');
+  Assert.IsTrue(Plan.Reason.Contains('no-relaunch'), Plan.Reason);
+
+  // The cleanup: every aside copy but the one we run from. That one is
+  // in use - Windows refuses it, and the NEXT bridge removes it.
+  var Gone := AsideBridgeExesToDelete(
+    [Canon, Aside, 'C:\x\mcp\RefactoringLightMcp.exe.7.old',
+     'C:\x\mcp\notes.txt', 'C:\x\mcp\RefactoringLightMcp.exe.old'], Aside);
+  Assert.AreEqual(1, Integer(Length(Gone)), 'one deletable copy');
+  Assert.AreEqual('C:\x\mcp\RefactoringLightMcp.exe.7.old', Gone[0], False);
 end;
 
 procedure TMcpPipeRegressionTests.AnAsideExeNamesTheInstallThatReplacedIt;

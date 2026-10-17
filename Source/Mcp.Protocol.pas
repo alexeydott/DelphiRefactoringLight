@@ -121,6 +121,56 @@ function BridgeVersionProblem(const ABridge, APlugin: string;
 ///  needed. The user followed that advice twice.</summary>
 function CanonicalBridgeExePath(const AImagePath: string): string;
 
+type
+  /// <summary>What a STARTING bridge does about the exe it runs from. An
+  ///  install cannot overwrite a running exe, so it moves the old one aside
+  ///  and writes the new one under the installed name - and the session that
+  ///  was running keeps the old code, because no process can swap its own
+  ///  image (1.22.1 / 1.22.3). It CAN hand its stdin/stdout to the new exe
+  ///  and wait for it: the client keeps seeing one live process the whole
+  ///  time, while the new code does the work (user, 2026-10-17).</summary>
+  TBridgeRelaunch = record
+    /// <summary>Start ANEWEXE on our own std handles and wait for it.</summary>
+    Wanted: Boolean;
+    /// <summary>The installed exe to hand over to, '' when there is none.</summary>
+    NewExe: string;
+    /// <summary>One line, in BOTH directions - "it did not hand over" is the
+    ///  half that needs explaining, and stderr is where it can be read.</summary>
+    Reason: string;
+  end;
+
+/// <summary>The image this process runs from, as the KERNEL knows it.
+///  That is NOT the same question as ParamStr(0): MEASURED (scratchpad
+///  whoami) - after a file is renamed under a running process,
+///  GetModuleFileName and ParamStr(0) keep answering the name it was
+///  STARTED with, because the loader caches it, while
+///  QueryFullProcessImageName follows the rename. An install renames the
+///  running bridge aside, so this is the ONLY way the process can notice
+///  that it has been replaced - and the reason the check cannot live in
+///  the startup code, where nothing has been renamed yet.</summary>
+function CurrentProcessImagePath: string;
+
+/// <summary>Whether this image should hand its stdio to the exe that
+///  replaced it. AIMAGEPATH is CurrentProcessImagePath, never ParamStr(0)
+///  - see there. Three reasons NOT to, each
+///  named: this IS the installed exe (the normal case), the caller said so
+///  (--no-relaunch, which the successor always gets so a loop is
+///  impossible), or the installed name is not on disk - a packaged host
+///  redirects %LOCALAPPDATA%, so the aside copy can live in a view the
+///  install never wrote to (1.22.3), and there is nothing to hand over
+///  to.</summary>
+function PlanBridgeRelaunch(const AImagePath: string;
+  const AFileExists: TFunc<string, Boolean>;
+  ASuppressed: Boolean): TBridgeRelaunch;
+
+/// <summary>Of AFILES, the aside copies an install left behind that may be
+///  deleted - every "&lt;exe&gt;.&lt;number&gt;.old" except AMYIMAGE, which is the
+///  one this process runs from and which Windows refuses to delete anyway.
+///  So the copy a hand-over leaves behind goes when the NEXT bridge
+///  starts.</summary>
+function AsideBridgeExesToDelete(const AFiles: TArray<string>;
+  const AMyImage: string): TArray<string>;
+
 // ---- a module a tool had to open must not stay behind invisibly ----
 
 type
@@ -582,6 +632,62 @@ begin
   Result := Base;
 end;
 
+function QueryFullProcessImageNameW(hProcess: THandle; dwFlags: DWORD;
+  lpExeName: PWideChar; var lpdwSize: DWORD): BOOL; stdcall;
+  external kernel32 name 'QueryFullProcessImageNameW';
+
+function CurrentProcessImagePath: string;
+var
+  Buf: array[0..1023] of Char;
+  Len: DWORD;
+begin
+  Len := Length(Buf);
+  if QueryFullProcessImageNameW(GetCurrentProcess, 0, @Buf[0], Len) then
+    Result := string(PChar(@Buf[0]))
+  else
+    Result := ParamStr(0);
+end;
+
+function PlanBridgeRelaunch(const AImagePath: string;
+  const AFileExists: TFunc<string, Boolean>;
+  ASuppressed: Boolean): TBridgeRelaunch;
+begin
+  Result := Default(TBridgeRelaunch);
+  Result.NewExe := CanonicalBridgeExePath(AImagePath);
+  if Result.NewExe = '' then
+  begin
+    Result.Reason := 'this is the installed exe';
+    Exit;
+  end;
+  if ASuppressed then
+  begin
+    Result.Reason := 'started from the aside copy on purpose (--no-relaunch)';
+    Result.NewExe := '';
+    Exit;
+  end;
+  if not Assigned(AFileExists) or not AFileExists(Result.NewExe) then
+  begin
+    Result.Reason := Format('an install moved this exe aside, but %s is not ' +
+      'there - nothing to hand over to', [Result.NewExe]);
+    Result.NewExe := '';
+    Exit;
+  end;
+  Result.Wanted := True;
+  Result.Reason := Format('an install replaced this exe - handing stdin/' +
+    'stdout over to %s', [Result.NewExe]);
+end;
+
+function AsideBridgeExesToDelete(const AFiles: TArray<string>;
+  const AMyImage: string): TArray<string>;
+var
+  F: string;
+begin
+  Result := nil;
+  for F in AFiles do
+    if (CanonicalBridgeExePath(F) <> '') and not SameText(F, AMyImage) then
+      Result := Result + [F];
+end;
+
 function BridgeVersionProblem(const ABridge, APlugin: string;
   AAge: TBridgeExeAge): string;
 begin
@@ -595,8 +701,9 @@ begin
     // The file is already right; a process cannot swap its own image.
     Result := Format('bridge exe %s, plugin %s - but the exe ON DISK has ' +
       'been replaced since this bridge started, so it is only the running ' +
-      'session that is old: start a new Claude Code session, nothing else ' +
-      'is needed', [ABridge, APlugin])
+      'session that is old. A bridge of 1.33.0 or newer hands over to the ' +
+      'new exe by itself with the next request; an older one needs a new ' +
+      'Claude Code session, nothing else', [ABridge, APlugin])
   else
     Result := Format('bridge exe %s, plugin %s - these must match. The ' +
       'installed exe is still the old one, so run install.cmd (it reports ' +

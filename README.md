@@ -1,6 +1,6 @@
 ﻿# Delphi Refactoring Light
 
-**Version 1.32.1** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
+**Version 1.33.0** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
 
 A design-time package for **Delphi 13** that connects to the built-in Delphi Language Server (`DelphiLSP.exe`) to provide a broad set of refactoring and code-analysis features directly in the editor:
 
@@ -575,6 +575,16 @@ server's short instructions and the tool names. While **no IDE runs**, the
 bridge offers only its own two tools (`ide_instances`, `select_ide`); the
 others appear by themselves as soon as an IDE with the plugin starts, in a
 running session too.
+
+An install while a session is running used to leave that session on the
+old exe for good: Windows cannot overwrite a running program, so the
+installer moves it aside and writes the new one under the installed name -
+and no process can swap its own image. The bridge now notices between two
+requests that it has been moved aside, starts the installed exe **on its
+own stdin/stdout** and waits for it: the client keeps talking to the same
+process it started, while the new code answers, and one
+`notifications/tools/list_changed` makes it fetch the tool list again. The
+aside copies of earlier installs are deleted when the next bridge starts.
 
 Where to register it:
 - `--scope user` (the printed default): available in every Claude Code

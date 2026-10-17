@@ -20,12 +20,15 @@ program RefactoringLightMcp;
 // Command line (for humans, not for Claude Code):
 //   --list     print the running IDEs as the bridge sees them, then exit
 //   --version  print the version, then exit
+//   --no-relaunch  do not hand over to a newer exe (see RunServer)
 
 {$APPTYPE CONSOLE}
 
 uses
   Winapi.Windows,
   System.SysUtils,
+  System.IOUtils,
+  System.StrUtils,
   System.Classes,
   System.SyncObjs,
   System.JSON,
@@ -87,6 +90,127 @@ begin
   end;
 end;
 
+// Aside copies of OUR exe that nobody runs from. Best effort by
+// definition: the one our own parent runs from is in use, so Windows
+// refuses it and the NEXT bridge removes it.
+procedure SweepAsideExes(AErrH: THandle);
+var
+  Mine, Canon: string;
+  Gone: Integer;
+begin
+  Gone := 0;
+  try
+    Mine := ParamStr(0);
+    Canon := CanonicalBridgeExePath(Mine);
+    if Canon = '' then Canon := Mine;
+    for var F in AsideBridgeExesToDelete(
+      TDirectory.GetFiles(ExtractFilePath(Canon),
+        ExtractFileName(Canon) + '.*.old'), Mine) do
+      if DeleteFile(PChar(F)) then Inc(Gone);
+  except
+    // a cleanup must never cost the session its server
+  end;
+  if Gone > 0 then
+    WriteOut(AErrH, Format('removed %d aside cop%s of an earlier install',
+      [Gone, IfThen(Gone = 1, 'y', 'ies')]));
+end;
+
+// Runs "<exe> --version" and reads its first line. The successor is PROBED
+// before it gets the real pipes: if it cannot start at all (a half-written
+// file, a missing dependency), handing the conversation over would leave
+// the session with no server, while simply carrying on with the old code
+// costs nothing but the version skew we already report.
+function AnswersItsVersion(const AExe: string; out AVersion: string): Boolean;
+var
+  Sec: TSecurityAttributes;
+  RdH, WrH, NulH: THandle;
+  SI: TStartupInfo;
+  PI: TProcessInformation;
+  Buf: array[0..511] of AnsiChar;
+  Got: DWORD;
+begin
+  Result := False;
+  AVersion := '';
+  Sec := Default(TSecurityAttributes);
+  Sec.nLength := SizeOf(Sec);
+  Sec.bInheritHandle := True;
+  if not CreatePipe(RdH, WrH, @Sec, 0) then Exit;
+  // NUL as the probe's stdin: our own stdin belongs to the client and a
+  // single byte read by the wrong process is a lost request.
+  NulH := CreateFile('NUL', GENERIC_READ, FILE_SHARE_READ or FILE_SHARE_WRITE,
+    @Sec, OPEN_EXISTING, 0, 0);
+  try
+    SetHandleInformation(RdH, HANDLE_FLAG_INHERIT, 0);
+    SI := Default(TStartupInfo);
+    SI.cb := SizeOf(SI);
+    SI.dwFlags := STARTF_USESTDHANDLES or STARTF_USESHOWWINDOW;
+    SI.wShowWindow := SW_HIDE;
+    SI.hStdInput := NulH;
+    SI.hStdOutput := WrH;
+    SI.hStdError := WrH;
+    if not CreateProcess(nil, PChar('"' + AExe + '" --version'), nil, nil,
+      True, CREATE_NO_WINDOW, nil, nil, SI, PI) then Exit;
+    try
+      // The write end must go here, or ReadFile would wait for a writer
+      // that is this process itself.
+      CloseHandle(WrH);
+      WrH := 0;
+      Got := 0;
+      if ReadFile(RdH, Buf[0], SizeOf(Buf) - 1, Got, nil) and (Got > 0) then
+      begin
+        Buf[Got] := #0;
+        AVersion := Trim(string(AnsiString(Buf)));
+      end;
+      WaitForSingleObject(PI.hProcess, 10000);
+    finally
+      CloseHandle(PI.hThread);
+      CloseHandle(PI.hProcess);
+    end;
+    Result := AVersion.StartsWith('RefactoringLightMcp', True);
+  finally
+    if WrH <> 0 then CloseHandle(WrH);
+    CloseHandle(RdH);
+    if NulH <> INVALID_HANDLE_VALUE then CloseHandle(NulH);
+  end;
+end;
+
+// Start AExe on OUR OWN std handles and wait for it. The client created
+// those pipes and waits on THIS process, so this one stays alive until the
+// successor is done - from the outside nothing happened but a slower start.
+function HandOverTo(const AExe: string; out AError: string): Integer;
+var
+  SI: TStartupInfo;
+  PI: TProcessInformation;
+  Code: DWORD;
+begin
+  Result := -1;
+  AError := '';
+  SI := Default(TStartupInfo);
+  SI.cb := SizeOf(SI);
+  SI.dwFlags := STARTF_USESTDHANDLES;
+  SI.hStdInput := GetStdHandle(STD_INPUT_HANDLE);
+  SI.hStdOutput := GetStdHandle(STD_OUTPUT_HANDLE);
+  SI.hStdError := GetStdHandle(STD_ERROR_HANDLE);
+  SetHandleInformation(SI.hStdInput, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+  SetHandleInformation(SI.hStdOutput, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+  SetHandleInformation(SI.hStdError, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+  if not CreateProcess(nil,
+    PChar('"' + AExe + '" --no-relaunch --announce-tools'), nil, nil,
+    True, 0, nil, nil, SI, PI) then
+  begin
+    AError := SysErrorMessage(GetLastError);
+    Exit;
+  end;
+  try
+    WaitForSingleObject(PI.hProcess, INFINITE);
+    if GetExitCodeProcess(PI.hProcess, Code) then Result := Integer(Code)
+    else Result := 0;
+  finally
+    CloseHandle(PI.hThread);
+    CloseHandle(PI.hProcess);
+  end;
+end;
+
 procedure RunServer;
 var
   InH, OutH, ErrH: THandle;
@@ -96,7 +220,10 @@ var
   Len, I, Start: Integer;
   Bridge: TMcpBridge;
   Line, Resp: string;
+  Plan: TBridgeRelaunch;
+  Ver, Err: string;
 begin
+  Plan := Default(TBridgeRelaunch);
   InH := GetStdHandle(STD_INPUT_HANDLE);
   OutH := GetStdHandle(STD_OUTPUT_HANDLE);
   ErrH := GetStdHandle(STD_ERROR_HANDLE);
@@ -120,12 +247,35 @@ begin
   try
     WriteOut(ErrH, 'RefactoringLightMcp ' + BridgeVersion + ' ready, working directory ' +
       Bridge.Cwd);
+    SweepAsideExes(ErrH);
+    if HasArg('announce-tools') then
+      // A hand-over means an install happened, so the IDE may offer other
+      // tools than the client fetched from our predecessor. CheckToolsChanged
+      // reports nothing until it has served one tools/list, so the ONE
+      // notification that makes the client refetch comes from here.
+      WriteOut(OutH, '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}');
     Acc := nil;
     Len := 0;
     // Requests are handled one after the other: Claude Code waits for each
     // tool result anyway, and the IDE side serialises on its main thread.
-    while ReadFile(InH, Buf[0], SizeOf(Buf), Got, nil) and (Got > 0) do
+    while True do
     begin
+      // BETWEEN two requests is the only safe moment to hand the pipes
+      // over: nothing is half-read (Len = 0), the answer to the last
+      // request is out, and the successor simply reads the next line.
+      // Asked here rather than in the watcher thread, because only this
+      // loop may act on it - so there is no shared state at all.
+      if (Len = 0) and not HasArg('no-relaunch') then
+      begin
+        Plan := PlanBridgeRelaunch(CurrentProcessImagePath,
+          function(APath: string): Boolean
+          begin
+            Result := TFile.Exists(APath);
+          end, False);
+        if Plan.Wanted then Break;
+      end;
+      if not (ReadFile(InH, Buf[0], SizeOf(Buf), Got, nil) and (Got > 0)) then
+        Break;
       SetLength(Acc, Len + Integer(Got));
       Move(Buf[0], Acc[Len], Got);
       Inc(Len, Got);
@@ -159,6 +309,20 @@ begin
     StopWatch.Free;
     Bridge.Free;
   end;
+
+  // Everything of ours is down now - the successor gets a clean field.
+  if not Plan.Wanted then Exit;
+  if not AnswersItsVersion(Plan.NewExe, Ver) then
+  begin
+    WriteOut(ErrH, Format('%s does not start (%s) - this session keeps the ' +
+      'old bridge', [Plan.NewExe, IfThen(Ver = '', 'no answer', Ver)]));
+    Exit;
+  end;
+  WriteOut(ErrH, Format('%s (now: %s)', [Plan.Reason, Ver]));
+  ExitCode := HandOverTo(Plan.NewExe, Err);
+  if Err <> '' then
+    WriteOut(ErrH, 'could not start it: ' + Err + ' - this session has no ' +
+      'bridge any more, start a new one');
 end;
 
 begin
