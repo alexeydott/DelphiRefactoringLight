@@ -40,6 +40,12 @@ type
     ///  fact for it - and the entry that cannot even compile was the one
     ///  the answer said nothing about.</summary>
     [Test] procedure AUnitListedWithoutAFileIsReported;
+    /// <summary>User, 2026-10-17: "Goto bei unused units macht gar
+    ///  nichts, obwohl die Unit7 nun gefunden wird." A finding with no
+    ///  file had nothing to open, and the button returned without a
+    ///  word - but it does have a place: the ENTRY that lists it, which
+    ///  is also what has to go.</summary>
+    [Test] procedure AFileLessFindingPointsAtTheEntryThatListsIt;
     /// <summary>The expensive facts are asked for CANDIDATES only. The
     ///  production parser needs 15.7 ms per file (measured over a real
     ///  project), so over 1822 units the difference is half a minute
@@ -289,6 +295,52 @@ begin
     'the form the main body creates is used: ' + NamesOf(Issues));
   Assert.IsTrue(FindIssue(Issues, 'Unit6', Other), 'Unit6 is unused');
   Assert.AreEqual(Ord(uukSafe), Ord(Other.Kind), 'and safe to remove');
+end;
+
+procedure TUnusedUnitsTests.AFileLessFindingPointsAtTheEntryThatListsIt;
+const
+  // his Project7.dpr, verbatim
+  Dpr =
+    'program Project7;'#13#10 +
+    ''#13#10 +
+    'uses'#13#10 +
+    '  Vcl.Forms,'#13#10 +
+    '  Unit5 in ''Unit5.pas'' {Form5},'#13#10 +
+    '  Unit6 in ''Unit6.pas'','#13#10 +
+    '  Unit7,'#13#10 +
+    '  Interfaces.MyClass in ''Interfaces.MyClass.pas'';'#13#10 +
+    ''#13#10 +
+    'begin'#13#10 +
+    'end.'#13#10;
+var
+  L, C: Integer;
+begin
+  Assert.IsTrue(UsesEntryPosition(Dpr, 'Unit7', L, C),
+    'the entry that lists it is found');
+  Assert.AreEqual(6, L, 'the line of "Unit7," - 0-based, as GotoLocation takes it');
+  Assert.AreEqual(2, C, 'and the column of the NAME, never the line start');
+
+  // An entry WITH an "in" clause is the same question.
+  Assert.IsTrue(UsesEntryPosition(Dpr, 'Unit5', L, C), 'Unit5');
+  Assert.AreEqual(4, L, 'line of Unit5');
+  Assert.AreEqual(2, C, 'column of Unit5');
+
+  // A dotted unit name is one name, not a qualifier and a member - the
+  // highlight has to cover all of it.
+  Assert.IsTrue(UsesEntryPosition(Dpr, 'Interfaces.MyClass', L, C),
+    'a dotted name');
+  Assert.AreEqual(7, L, 'line of Interfaces.MyClass');
+  Assert.AreEqual(2, C, 'column of Interfaces.MyClass');
+
+  // Pascal does not care about case, and neither does the project list.
+  Assert.IsTrue(UsesEntryPosition(Dpr, 'uNiT6', L, C), 'case does not matter');
+  Assert.AreEqual(5, L, 'line of Unit6');
+
+  // The list may have changed since the check ran - then the button says
+  // so instead of jumping somewhere.
+  Assert.IsFalse(UsesEntryPosition(Dpr, 'Unit9', L, C),
+    'a name the clause does not carry');
+  Assert.IsFalse(UsesEntryPosition('', 'Unit7', L, C), 'and no text at all');
 end;
 
 procedure TUnusedUnitsTests.OnlyTheProjectsOwnUnitsAreProjectUnits;

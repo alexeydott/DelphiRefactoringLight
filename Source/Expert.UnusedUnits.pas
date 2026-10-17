@@ -140,6 +140,16 @@ function CollectUnusedProjectUnits(const AUnits: TArray<TUnitFacts>;
   out ANotes: TArray<string>;
   const ADetails: TUnusedUnitDetails = nil): TArray<TUnusedUnitIssue>;
 
+/// <summary>Where the project's own source LISTS AUnitName: the entry in
+///  its uses clause, as a 0-BASED line and column (what GotoLocation
+///  takes). That is the place of a finding which has no file at all - the
+///  stale entry IS the problem, and it is what has to go. The column is
+///  the NAME's, never 0: a highlight counted from the line start marks
+///  the indentation and half the entry (the lesson of 1.23.2, third time).
+///  False when the clause does not name it (any more).</summary>
+function UsesEntryPosition(const AMainText, AUnitName: string;
+  out ALine0, ACol0: Integer): Boolean;
+
 /// <summary>How many of AUNITS the project actually LISTS. The rest are
 ///  reference sources - units on the search path whose uses clauses count
 ///  but which the project does not contain - and counting those as project
@@ -153,7 +163,9 @@ implementation
 uses
   System.Classes,                    // TStringList, for the notes
   System.Generics.Collections,
-  Expert.AutoImport;                 // HasWholeWordCI - one place for it
+  Expert.AutoImport,                 // HasWholeWordCI - one place for it
+  Expert.PascalScanner,              // NameColumnOnLine, SplitEditorLines
+  Expert.UsesGraph;                  // ParseUsesEntries - and its LINE
 
 function UnusedUnitIssueId(const AKey: string): string;
 var
@@ -169,6 +181,31 @@ begin
     H := H * 16777619;
   end;
   Result := IntToHex(H, 8);
+end;
+
+function UsesEntryPosition(const AMainText, AUnitName: string;
+  out ALine0, ACol0: Integer): Boolean;
+var
+  E: TUnitUsesEntry;
+  Lines: TArray<string>;
+  C: Integer;
+begin
+  ALine0 := 0;
+  ACol0 := 0;
+  Result := False;
+  if (AMainText = '') or (AUnitName = '') then Exit;
+  Lines := SplitEditorLines(AMainText);
+  for E in TUsesGraphAnalyzer.ParseUsesEntries(AMainText) do
+  begin
+    if not SameText(E.UnitName, AUnitName) then Continue;
+    ALine0 := E.Line - 1;              // the record counts from 1
+    if (ALine0 >= 0) and (ALine0 <= High(Lines)) then
+    begin
+      C := NameColumnOnLine(Lines[ALine0], AUnitName);
+      if C >= 0 then ACol0 := C;
+    end;
+    Exit(True);
+  end;
 end;
 
 function UnusedUnitKindText(AKind: TUnusedUnitKind): string;

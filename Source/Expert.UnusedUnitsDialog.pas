@@ -536,12 +536,44 @@ end;
 procedure TUnusedUnitsForm.DoGoto(Sender: TObject);
 var
   Issue: TUnusedUnitIssue;
+  Dproj, Main, Text: string;
+  L, C: Integer;
 begin
   if not SelectedIssue(Issue) then Exit;
-  if Issue.FileName = '' then Exit;
-  // The unit's first line, and nothing highlighted - there is no symbol
-  // this check could point at.
-  Editor.GotoLocation(Issue.FileName, 0, 0, 0);
+
+  if Issue.FileName <> '' then
+  begin
+    // The unit's first line, and nothing highlighted - there is no symbol
+    // this check could point at.
+    if not Editor.GotoLocation(Issue.FileName, 0, 0, 0) then
+      ShowThemedMessage('Could not open ' + Issue.FileName + '.');
+    Exit;
+  end;
+
+  // A finding with no file of its own: its PLACE is the ENTRY that lists
+  // it, in the project's own source - which is also exactly what has to
+  // go. The button used to return here without a word (user, 2026-10-17:
+  // "Goto bei unused units macht gar nichts").
+  Dproj := Editor.GetCurrentProjectDproj;
+  Main := '';
+  if Dproj <> '' then Main := ChangeFileExt(Dproj, '.dpr');
+  if (Main <> '') and ReadUnitText(Main, Text) and
+     UsesEntryPosition(Text, Issue.UnitName, L, C) then
+  begin
+    if not Editor.GotoLocation(Main, L, C, Length(Issue.UnitName)) then
+      ShowThemedMessage('Could not open ' + Main + '.');
+    Exit;
+  end;
+
+  // Never a silent no-op: say which of the two it is.
+  if Main = '' then
+    ShowThemedMessage(Issue.UnitName + ' has no file to open, and no ' +
+      'project is open either - there is nothing to go to.')
+  else
+    ShowThemedMessage(Format('%s has no file to open: the project lists ' +
+      'it without one. Its entry should be in the uses clause of %s, but ' +
+      'that clause does not name it (any more) - the list has changed ' +
+      'since the check ran.', [Issue.UnitName, ExtractFileName(Main)]));
 end;
 
 procedure TUnusedUnitsForm.DoCopy(Sender: TObject);
