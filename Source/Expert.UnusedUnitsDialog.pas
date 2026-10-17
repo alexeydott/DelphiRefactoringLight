@@ -188,6 +188,8 @@ begin
   MainFile := ChangeFileExt(Dproj, '.dpr');
   if not TFile.Exists(MainFile) then MainFile := '';
 
+  if Assigned(AProgress) then
+    AProgress(0, 0, 'reading the project''s unit list...');
   ProjectFiles := Editor.GetProjectSourceFiles;
   if Length(ProjectFiles) = 0 then
   begin
@@ -198,6 +200,12 @@ begin
   // Reference sources BEYOND the project: the uses closure. A unit on the
   // search path never appears in the .dpr and can still name a project
   // unit - scanning only project files turns that into a false finding.
+  // THE expensive step, and it has no progress of its own: on a project
+  // of 1800 units the closure takes seconds, and before issue #47 nothing
+  // said so - the window simply stood there.
+  if Assigned(AProgress) then
+    AProgress(0, 0, Format('following the uses clauses of %d project ' +
+      'unit(s) - this can take a few seconds...', [Length(ProjectFiles)]));
   ScopeAll := ProjectScopeFiles(Editor.GetActiveFileName, True, True, Extra);
 
   Facts := TList<TUnitFacts>.Create;
@@ -279,6 +287,12 @@ type
     procedure FillRows;
     procedure DoSelect(Sender: TObject; Item: TListItem; Change: TItemChange);
     procedure DoGoto(Sender: TObject);
+    /// <summary>A button of a MODELESS form closes it by calling Close -
+    ///  ModalResult is a plain field that only ShowModal's loop reads, so
+    ///  on this window the click (and Escape, through Cancel) did nothing
+    ///  at all (issue #47).</summary>
+    procedure DoCloseClick(Sender: TObject);
+    procedure DoFormClose(Sender: TObject; var Action: TCloseAction);
     procedure DoCopy(Sender: TObject);
     function SelectedIssue(out AIssue: TUnusedUnitIssue): Boolean;
   public
@@ -293,6 +307,7 @@ var
   Btn: TButton;
 begin
   inherited CreateNew(Application);
+  OnClose := DoFormClose;
   FIssues := AIssues;
   FNotes := ANotes;
 
@@ -343,11 +358,11 @@ begin
 
   Btn := TButton.Create(Self);
   Btn.Parent := Bar;
-  Btn.Caption := 'Close';
+  Btn.Caption := '&Close';
   Btn.SetBounds(Bar.Width - 98, 8, 90, 28);
   Btn.Anchors := [akRight, akTop];
-  Btn.ModalResult := mrClose;
-  Btn.Cancel := True;
+  Btn.OnClick := DoCloseClick;
+  Btn.Cancel := True;          // Escape clicks it, so it runs OnClick too
 
   FList := TThemedListView.Create(Self);
   FList.Parent := Self;
@@ -415,6 +430,18 @@ begin
   if Change <> ctState then Exit;
   if not SelectedIssue(Issue) then Exit;
   FDetail.Text := Issue.FileName + sLineBreak + sLineBreak + Issue.Reason;
+end;
+
+procedure TUnusedUnitsForm.DoCloseClick(Sender: TObject);
+begin
+  Close;
+end;
+
+procedure TUnusedUnitsForm.DoFormClose(Sender: TObject; var Action: TCloseAction);
+begin
+  // A result window of its own - every run opens a new one, so the closed
+  // one has to go rather than wait for the package to unload.
+  Action := caFree;
 end;
 
 procedure TUnusedUnitsForm.DoGoto(Sender: TObject);

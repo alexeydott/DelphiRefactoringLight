@@ -184,6 +184,11 @@ type
     procedure DoFixClick(Sender: TObject);
     procedure DoGotoClick(Sender: TObject);
     procedure DoCopyClick(Sender: TObject);
+    /// <summary>Close, not ModalResult: this window is shown with Show,
+    ///  and nothing outside ShowModal's loop ever reads ModalResult
+    ///  (issue #47).</summary>
+    procedure DoCloseClick(Sender: TObject);
+    procedure DoFormClose(Sender: TObject; var Action: TCloseAction);
   public
     constructor CreateWith(const AIssues: TArray<TEncodingIssue>;
       ATarget: TSourceEncoding; AChecked: Integer);
@@ -210,6 +215,7 @@ var
 
 begin
   inherited CreateNew(nil);
+  OnClose := DoFormClose;
   FIssues := AIssues;
   FTarget := ATarget;
   Caption := 'File encoding';
@@ -255,7 +261,7 @@ begin
   Panel.BevelOuter := bvNone;
   FBtnFix := Btn('Convert c&hecked', 150, alLeft, DoFixClick);
   Btn('Copy &report', 110, alLeft, DoCopyClick);
-  Btn('&Close', 75, alRight, nil).ModalResult := mrCancel;
+  Btn('&Close', 75, alRight, DoCloseClick).Cancel := True;
   Btn('&Go to', 75, alRight, DoGotoClick);
 
   FillRows;
@@ -354,6 +360,18 @@ begin
     IfThen(Failed > 0, Format(' %d could NOT be converted.', [Failed]), '')]);
   if Report <> '' then
     ShowThemedMessage('Not converted:' + sLineBreak + sLineBreak + Report);
+end;
+
+procedure TEncodingCheckDialog.DoCloseClick(Sender: TObject);
+begin
+  Close;
+end;
+
+procedure TEncodingCheckDialog.DoFormClose(Sender: TObject; var Action: TCloseAction);
+begin
+  // A result window of its own - every run opens a new one, so the closed
+  // one has to go rather than wait for the package to unload.
+  Action := caFree;
 end;
 
 procedure TEncodingCheckDialog.DoGotoClick(Sender: TObject);

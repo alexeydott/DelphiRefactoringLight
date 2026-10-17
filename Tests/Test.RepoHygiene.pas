@@ -61,6 +61,13 @@ type
     ///  trap in 1.10.1). A call that highlights NOTHING may of course go
     ///  to the line start.</summary>
     [Test] procedure NoGotoHighlightsFromTheLineStart;
+    /// <summary>Issue #47: the Close button of the two new result windows
+    ///  did nothing. ModalResult is a plain field that only ShowModal's
+    ///  loop ever reads (verified in Vcl.Forms: the property writes
+    ///  FModalResult and nothing else looks at it), so on a window shown
+    ///  with Show the click is a no-op - and so is Escape, which clicks
+    ///  that same button. Third time: 1.16.20 L3g was the first.</summary>
+    [Test] procedure NoModelessWindowClosesThroughModalResult;
 
     /// <summary>MSBuild - and the IDE's own project builder, which is what
     ///  a bds.exe build uses - reads EVERY environment variable as a
@@ -370,6 +377,55 @@ begin
         end;
     end;
   Result := nil;
+end;
+
+procedure TRepoHygieneTests.NoModelessWindowClosesThroughModalResult;
+var
+  Offenders: TStringList;
+  Modeless: Integer;
+begin
+  var Root := RepoRoot;
+  Assert.IsTrue(Root <> '', 'the repository root must be found');
+  var Dir := TPath.Combine(Root, 'Source');
+  Assert.IsTrue(TDirectory.Exists(Dir), 'Source must be there: ' + Dir);
+
+  Offenders := TStringList.Create;
+  try
+    Modeless := 0;
+    for var F in TDirectory.GetFiles(Dir, '*.pas') do
+    begin
+      // Code only: the sentence explaining the rule names ModalResult.
+      var Lines := MaskCommentsAndStrings(SplitEditorLines(TFile.ReadAllText(F)));
+      var Text := string.Join(#10, Lines);
+      // A unit that shows a form MODELESS and never shows one modally:
+      // there, a ModalResult assignment can only ever be dead. A unit with
+      // both is out of reach of a textual sweep - the assignment may well
+      // belong to the modal dialog - which is the limit of this check and
+      // is why the two reported units are exactly the shape it catches.
+      if (Pos('.Show;', Text) = 0) or (Pos('ShowModal', Text) > 0) then Continue;
+      Inc(Modeless);
+      var P := Pos('ModalResult :=', Text);
+      if P > 0 then
+      begin
+        var Head := Copy(Text, 1, P - 1);
+        var LineStart := LastDelimiter(#10, Head) + 1;
+        Offenders.Add(Format('%s: %s - this unit shows its window with ' +
+          'Show, so ModalResult closes nothing; call Close',
+          [ExtractFileName(F),
+           Trim(Copy(Text, LineStart, Pos(#10, Text + #10, P) - LineStart))]));
+      end;
+    end;
+
+    // Without this the sweep could pass by finding no modeless window at
+    // all - a renamed Show would make it vacuous.
+    Assert.IsTrue(Modeless >= 3,
+      Format('the sweep must see the modeless result windows (saw %d)',
+        [Modeless]));
+    Assert.AreEqual('', Offenders.Text.Trim,
+      'a window shown with Show closes through Close, not ModalResult');
+  finally
+    Offenders.Free;
+  end;
 end;
 
 procedure TRepoHygieneTests.NoGotoHighlightsFromTheLineStart;
