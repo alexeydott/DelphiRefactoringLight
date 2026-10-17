@@ -33,6 +33,13 @@ type
     /// <summary>What the check could not look at is named instead of
     ///  being left out, and the ids name the file, not a row.</summary>
     [Test] procedure WhatWasNotCheckedIsSaidOutLoud;
+    /// <summary>User, 2026-10-17, from his running IDE: "in der aktuell
+    ///  offenen IDE wird Unit7 nicht als unbenutzt gefunden, obwohl sie
+    ///  nicht einmal existiert". A .dpr entry without an "in '<file>'"
+    ///  clause has no file name, so the per-file gathering never made a
+    ///  fact for it - and the entry that cannot even compile was the one
+    ///  the answer said nothing about.</summary>
+    [Test] procedure AUnitListedWithoutAFileIsReported;
     /// <summary>The expensive facts are asked for CANDIDATES only. The
     ///  production parser needs 15.7 ms per file (measured over a real
     ///  project), so over 1822 units the difference is half a minute
@@ -222,6 +229,66 @@ begin
   for N in Notes do Joined := Joined + N + '|';
   Assert.IsTrue(Joined.Contains('main source was not read'),
     'no main source is a limit worth naming: ' + Joined);
+end;
+
+procedure TUnusedUnitsTests.AUnitListedWithoutAFileIsReported;
+var
+  Units: TArray<TUnitFacts>;
+  Main, Used, Dead, Missing, Ghost, Broken: TUnitFacts;
+  Issues: TArray<TUnusedUnitIssue>;
+  Notes: TArray<string>;
+  Issue, Other: TUnusedUnitIssue;
+begin
+  // The reported project, verbatim: Unit7 is listed with no file clause
+  // and no such file exists anywhere.
+  Main := Facts('Project7', 'C:\p\Project7.dpr', True,
+    ['Vcl.Forms', 'Unit5', 'Unit6', 'Unit7', 'Ghost', 'Broken']);
+  Main.IsMainUnit := True;
+  Main.MainBody := 'begin Application.CreateForm(TForm5, Form5); end.';
+
+  Used := Facts('Unit5', 'C:\p\Unit5.pas', True, ['Vcl.Forms']);
+  Used.ExportedIdents := ['TForm5'];        // the body names it
+  Dead := Facts('Unit6', 'C:\p\Unit6.pas', True, []);
+
+  Missing := Facts('Unit7', '', True, []);
+  Missing.Readable := False;
+  Ghost := Facts('Ghost', '', True, []);
+  Ghost.Readable := False;
+  // The control: a file that IS named but cannot be read is a different
+  // answer - there the check could not look, here there is nothing.
+  Broken := Facts('Broken', 'C:\p\Broken.pas', True, []);
+  Broken.Readable := False;
+
+  Units := [Main, Used, Dead, Missing, Ghost, Broken];
+  Issues := CollectUnusedProjectUnits(Units, Notes);
+
+  Assert.IsTrue(FindIssue(Issues, 'Unit7', Issue),
+    'the unit the project lists without a file is reported: ' +
+    NamesOf(Issues));
+  Assert.AreEqual(Ord(uukNoSource), Ord(Issue.Kind),
+    'and it is a finding, not a "could not look": ' +
+    UnusedUnitKindText(Issue.Kind));
+  Assert.IsTrue(Issue.Reason.Contains('no uses clause names it'),
+    'the reason says the half that IS decided: ' + Issue.Reason);
+  Assert.IsTrue(Issue.Reason.Contains('no source'),
+    'and the half that is not: ' + Issue.Reason);
+
+  // Both halves of the id rule: '' would be ONE id for every such entry.
+  Assert.IsTrue(FindIssue(Issues, 'Ghost', Other), 'Ghost is listed too');
+  Assert.AreNotEqual(Issue.Id, Other.Id, False,
+    'two units without a file must not share one id');
+  Assert.AreNotEqual('', Issue.Id, False, 'and an id is not empty');
+
+  Assert.IsTrue(FindIssue(Issues, 'Broken', Other), 'Broken is listed');
+  Assert.AreEqual(Ord(uukUnreadable), Ord(Other.Kind),
+    'a file that could not be READ keeps its own kind');
+
+  // ...and nothing else moved: Unit5 is reached from the body, Unit6 is
+  // the ordinary finding.
+  Assert.IsFalse(FindIssue(Issues, 'Unit5', Other),
+    'the form the main body creates is used: ' + NamesOf(Issues));
+  Assert.IsTrue(FindIssue(Issues, 'Unit6', Other), 'Unit6 is unused');
+  Assert.AreEqual(Ord(uukSafe), Ord(Other.Kind), 'and safe to remove');
 end;
 
 procedure TUnusedUnitsTests.OnlyTheProjectsOwnUnitsAreProjectUnits;

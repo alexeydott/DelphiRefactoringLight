@@ -152,15 +152,54 @@ begin
     end;
 end;
 
+function ResolveListedUnit(const AName: string;
+  out APath: string): Boolean;
+var
+  Snap: IUnitSnapshot;
+begin
+  // The identifier index knows the library and the project search paths,
+  // which is where a unit listed without "in '<file>'" has to come from.
+  APath := '';
+  Snap := TUnitIndex.Instance.Snapshot;
+  Result := (Snap <> nil) and Snap.TryGetUnitPath(AName, APath) and
+    (APath <> '');
+end;
+
+/// <summary>The fact that answers a name AS THE PROJECT LISTS IT, or -1.
+///  Exact first; then the last dotted segment, because a .dpr may list
+///  "Forms" while the unit is "Vcl.Forms" (unit scope names). That loose
+///  match errs towards SILENCE on purpose - taking two units for one can
+///  only suppress a finding, never invent one.</summary>
+function IndexOfListedUnit(const AFacts: TList<TUnitFacts>;
+  const AByName: TDictionary<string, Integer>;
+  const AName: string): Integer;
+var
+  Last, N: string;
+  I: Integer;
+begin
+  if AByName.TryGetValue(LowerCase(AName), Result) then Exit;
+  Last := AName;
+  if Last.Contains('.') then
+    Last := Last.Substring(Last.LastIndexOf('.') + 1);
+  for I := 0 to AFacts.Count - 1 do
+  begin
+    N := AFacts[I].UnitName;
+    if N.Contains('.') then N := N.Substring(N.LastIndexOf('.') + 1);
+    if SameText(N, Last) then Exit(I);
+  end;
+  Result := -1;
+end;
+
 function GatherUnusedUnitFacts(out AError: string;
   const AProgress: TProc<Integer, Integer, string>): TArray<TUnitFacts>;
 var
   Facts: TList<TUnitFacts>;
   Seen: TDictionary<string, Boolean>;
-  Dproj, MainFile: string;
-  ProjectFiles, ScopeAll: TArray<string>;
+  ByName: TDictionary<string, Integer>;
+  Dproj, MainFile, Path: string;
+  ProjectFiles, ScopeAll, MainUses: TArray<string>;
   Extra: TScopeExtra;
-  I: Integer;
+  I, J: Integer;
   F: TUnitFacts;
   Text: string;
 begin
@@ -227,6 +266,7 @@ begin
         F.UsesNames := UsesNamesOf(Text);
         F.MainBody := MainBodyOf(Text);
       end;
+      MainUses := F.UsesNames;    // the project's membership list
       Facts.Add(F);
       Seen.AddOrSetValue(LowerCase(MainFile), True);
     end;
@@ -266,6 +306,55 @@ begin
       F.Readable := ReadUnitText(ScopeAll[I], Text);
       if F.Readable then F.UsesNames := UsesNamesOf(Text);
       Facts.Add(F);
+    end;
+
+    // A unit the .dpr lists WITHOUT an "in '<file>'" clause carries no
+    // file name in the project's module list, so not one of the loops
+    // above ever saw it. MEASURED in a user's IDE (2026-10-17): the
+    // project listed Unit7, no such file existed anywhere, and the check
+    // answered "every unit this project lists is named somewhere". The
+    // MAIN SOURCE'S OWN uses clause is that list, so it closes the gap.
+    ByName := TDictionary<string, Integer>.Create;
+    try
+      for I := 0 to Facts.Count - 1 do
+        ByName.AddOrSetValue(LowerCase(Facts[I].UnitName), I);
+
+      for var Listed in MainUses do
+      begin
+        if Listed = '' then Continue;
+        J := IndexOfListedUnit(Facts, ByName, Listed);
+        if J >= 0 then
+        begin
+          // It came in as a reference source of the closure (Vcl.Forms and
+          // its kind arrive that way). The project LISTS it, so it is a
+          // candidate like every other entry.
+          if not Facts[J].InProject then
+          begin
+            F := Facts[J];
+            F.InProject := True;
+            Facts[J] := F;
+          end;
+          Continue;
+        end;
+
+        F := Default(TUnitFacts);
+        F.UnitName := Listed;
+        F.InProject := True;
+        // When nothing resolves the name there is nothing to read - and
+        // THAT is the finding, not a reason to drop the entry.
+        if ResolveListedUnit(Listed, Path) and
+           not Seen.ContainsKey(LowerCase(Path)) then
+        begin
+          Seen.AddOrSetValue(LowerCase(Path), True);
+          F.FileName := Path;
+          F.Readable := ReadUnitText(Path, Text);
+          if F.Readable then F.UsesNames := UsesNamesOf(Text);
+        end;
+        ByName.AddOrSetValue(LowerCase(Listed), Facts.Count);
+        Facts.Add(F);
+      end;
+    finally
+      ByName.Free;
     end;
 
     Result := Facts.ToArray;
@@ -491,7 +580,7 @@ var
   Notes: TArray<string>;
   Err, Summary: string;
   Prog: TCheckProgressWindow;
-  Safe, Hint, Unknown, InProject: Integer;
+  Safe, Hint, NoSrc, Unknown, InProject: Integer;
   Form: TUnusedUnitsForm;
   I: TUnusedUnitIssue;
 begin
@@ -518,11 +607,13 @@ begin
 
   Safe := 0;
   Hint := 0;
+  NoSrc := 0;
   Unknown := 0;
   for I in Issues do
     case I.Kind of
       uukSafe: Inc(Safe);
       uukInitCode: Inc(Hint);
+      uukNoSource: Inc(NoSrc);
       uukUnreadable: Inc(Unknown);
     end;
 
@@ -532,8 +623,9 @@ begin
   InProject := ProjectUnitCount(Facts);
   Summary := Format('%d of %d project unit(s) are named by no uses clause: ' +
     '%d without an initialization section, %d with one (check those), ' +
-    '%d not checked. %d further unit(s) were read as reference sources.',
-    [Length(Issues), InProject, Safe, Hint, Unknown,
+    '%d with no source found, %d not checked. %d further unit(s) were ' +
+    'read as reference sources.',
+    [Length(Issues), InProject, Safe, Hint, NoSrc, Unknown,
      Length(Facts) - InProject]);
 
   if Length(Issues) = 0 then

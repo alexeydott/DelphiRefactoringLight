@@ -41,6 +41,14 @@ type
     ///  container, an RTTI or logger registration - so this is a HINT to
     ///  check, never a "safe to remove".</summary>
     uukInitCode,
+    /// <summary>Nothing names it, and no source of that name was found:
+    ///  the project lists a unit that is not there. MEASURED in a user's
+    ///  IDE (2026-10-17): the .dpr listed "Unit7" with no "in '<file>'"
+    ///  clause and no such file existed anywhere, and the check answered
+    ///  "every unit this project lists is named somewhere" - the facts
+    ///  are gathered per FILE, so the one entry that cannot even compile
+    ///  was the one nothing was said about.</summary>
+    uukNoSource,
     /// <summary>Its text could not be read, so nothing about it was
     ///  decided. Listed so the answer does not look complete.</summary>
     uukUnreadable);
@@ -103,9 +111,12 @@ type
     Id: string;
   end;
 
-/// <summary>FNV-1a over the lower-cased file name. Same shape as the other
-///  project checks' ids - it names the PLACE, never a list position.</summary>
-function UnusedUnitIssueId(const AFileName: string): string;
+/// <summary>FNV-1a over the lower-cased key. Same shape as the other
+///  project checks' ids - it names the PLACE, never a list position. The
+///  key is the file name; a unit the project lists WITHOUT a file has no
+///  place but its own name, and the planner passes 'unit:<name>' for it -
+///  two such entries must never end up sharing one id.</summary>
+function UnusedUnitIssueId(const AKey: string): string;
 
 /// <summary>Plain text for a kind, for a list column and a report.</summary>
 function UnusedUnitKindText(AKind: TUnusedUnitKind): string;
@@ -144,13 +155,13 @@ uses
   System.Generics.Collections,
   Expert.AutoImport;                 // HasWholeWordCI - one place for it
 
-function UnusedUnitIssueId(const AFileName: string): string;
+function UnusedUnitIssueId(const AKey: string): string;
 var
   H: Cardinal;
   B: Byte;
   Key: string;
 begin
-  Key := LowerCase(AFileName);
+  Key := LowerCase(AKey);
   H := 2166136261;
   for B in TEncoding.UTF8.GetBytes(Key) do
   begin
@@ -165,6 +176,7 @@ begin
   case AKind of
     uukSafe: Result := 'unused';
     uukInitCode: Result := 'unused, has initialization';
+    uukNoSource: Result := 'no source found';
     uukUnreadable: Result := 'not checked';
   else
     Result := '';
@@ -241,13 +253,33 @@ begin
       var Issue := Default(TUnusedUnitIssue);
       Issue.UnitName := F.UnitName;
       Issue.FileName := F.FileName;
-      Issue.Id := UnusedUnitIssueId(F.FileName);
+      // No file means no place but the name itself - and '' would be the
+      // SAME id for every such entry.
+      if F.FileName <> '' then
+        Issue.Id := UnusedUnitIssueId(F.FileName)
+      else
+        Issue.Id := UnusedUnitIssueId('unit:' + F.UnitName);
 
       if not F.Readable then
       begin
-        Issue.Kind := uukUnreadable;
-        Issue.Reason := 'the file could not be read, so nothing about it ' +
-          'was decided';
+        if F.FileName = '' then
+        begin
+          // The other half IS decided: no uses clause names it, and that
+          // comes from the OTHER units, not from this one. So this is a
+          // finding rather than a gap - and the honest reason says where
+          // the check cannot look.
+          Issue.Kind := uukNoSource;
+          Issue.Reason := 'no uses clause names it, and no source of that ' +
+            'name was found - the project lists a unit that is not there. ' +
+            'Either the entry is stale, or its file is somewhere only the ' +
+            'compiler''s search path knows.';
+        end
+        else
+        begin
+          Issue.Kind := uukUnreadable;
+          Issue.Reason := 'the file could not be read, so nothing about ' +
+            'it was decided';
+        end;
         Issues.Add(Issue);
         Continue;
       end;
@@ -313,8 +345,9 @@ begin
 
     if Unreadable.Count > 0 then
     begin
-      Notes.Add(Format('%d file(s) could not be read; a uses clause of ' +
-        'theirs may name a unit listed below:', [Unreadable.Count]));
+      Notes.Add(Format('%d listed unit(s) could not be read - no source ' +
+        'found, or the file is unreadable; a uses clause of theirs may ' +
+        'name a unit listed below:', [Unreadable.Count]));
       for I := 0 to Unreadable.Count - 1 do
         Notes.Add('    ' + Unreadable[I]);
     end;

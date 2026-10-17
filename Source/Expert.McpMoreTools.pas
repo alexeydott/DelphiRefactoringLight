@@ -3129,6 +3129,7 @@ begin
   try
     var Safe := 0;
     var Hint := 0;
+    var NoSrc := 0;
     var Unknown := 0;
     Ids := nil;
     for var Issue in Issues do
@@ -3137,6 +3138,7 @@ begin
       case Issue.Kind of
         uukSafe: Inc(Safe);
         uukInitCode: Inc(Hint);
+        uukNoSource: Inc(NoSrc);
         uukUnreadable: Inc(Unknown);
       end;
     end;
@@ -3151,6 +3153,9 @@ begin
     Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
     Res.AddPair('unused', TJSONNumber.Create(Safe));
     Res.AddPair('withInitCode', TJSONNumber.Create(Hint));
+    // The project lists them and no source of that name was found - that
+    // is a finding of its own, not a gap in what was looked at.
+    Res.AddPair('noSourceFound', TJSONNumber.Create(NoSrc));
     Res.AddPair('notChecked', TJSONNumber.Create(Unknown));
 
     // The counts are always complete; the ROWS are capped. Saying which is
@@ -3167,6 +3172,7 @@ begin
       case Issue.Kind of
         uukSafe: O.AddPair('kind', 'unused');
         uukInitCode: O.AddPair('kind', 'unused_with_init_code');
+        uukNoSource: O.AddPair('kind', 'no_source_found');
         uukUnreadable: O.AddPair('kind', 'not_checked');
       end;
       O.AddPair('reason', Issue.Reason);
