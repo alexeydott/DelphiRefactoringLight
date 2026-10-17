@@ -58,6 +58,14 @@ type
     FLblPreview: TLabel;
     FMemoPreview: TMemo;
 
+    /// <summary>Issue #46: a class that provides no IInterface cannot
+    ///  implement the extracted interface at all. The panel says so and
+    ///  offers the ancestor change; it stays hidden when there is
+    ///  nothing to report.</summary>
+    FPnlIInterface: TPanel;
+    FLblIInterface: TLabel;
+    FChkChangeBase: TCheckBox;
+
     FBtnOk: TButton;
     FBtnCancel: TButton;
 
@@ -104,6 +112,10 @@ type
     procedure DoPresetProperties(Sender: TObject);
     procedure DoPresetFields(Sender: TObject);
     procedure DoPresetNone(Sender: TObject);
+    procedure DoChangeBaseClick(Sender: TObject);
+    /// <summary>Fills the IInterface panel from FInfo.IInterface, which the
+    ///  wizard filled before the dialog was built.</summary>
+    procedure RefreshIInterfaceHint;
 
     /// <summary>Toggles the visibility section that begins at the given
     ///  CheckListBox row index: walks forward until the next header (or
@@ -178,6 +190,7 @@ begin
     FCurrentInterfaceKey := UpperCase(FInfo.InterfaceName);
   RefreshExistingMemberMarks;
   RefreshPreview;
+  RefreshIInterfaceHint;
   EnableThemes(Self);
   PrepareDialog(Self, AOwner);
 end;
@@ -288,8 +301,35 @@ begin
   // Bottom button strip. MUST be its own alBottom panel so the buttons
   // get a reserved area; otherwise alClient panels added later cover
   // them up.
+  // Issue #46. TWO alBottom siblings are ordered by their TOP, not by the
+  // order they were created in, so both get an explicit one - the button
+  // bar has to stay below the hint.
+  FPnlIInterface := TPanel.Create(Self);
+  FPnlIInterface.Parent := Self;
+  FPnlIInterface.Top := 10000;
+  FPnlIInterface.Align := alBottom;
+  FPnlIInterface.Height := 62;
+  FPnlIInterface.BevelOuter := bvNone;
+  FPnlIInterface.Visible := False;
+
+  FLblIInterface := TLabel.Create(Self);
+  FLblIInterface.Parent := FPnlIInterface;
+  FLblIInterface.SetBounds(Pad, 4, ClientWidth - 2 * Pad, 32);
+  // AutoSize + WordWrap measures against the DEFAULT width, which makes
+  // an invisible giant out of the label (CLAUDE.md, VCL pitfalls).
+  FLblIInterface.AutoSize := False;
+  FLblIInterface.WordWrap := True;
+  FLblIInterface.Anchors := [akLeft, akTop, akRight];
+
+  FChkChangeBase := TCheckBox.Create(Self);
+  FChkChangeBase.Parent := FPnlIInterface;
+  FChkChangeBase.SetBounds(Pad, 38, ClientWidth - 2 * Pad, 20);
+  FChkChangeBase.Anchors := [akLeft, akTop, akRight];
+  FChkChangeBase.OnClick := DoChangeBaseClick;
+
   var PnlBottom: TPanel := TPanel.Create(Self);
   PnlBottom.Parent := Self;
+  PnlBottom.Top := 20000;
   PnlBottom.Align := alBottom;
   PnlBottom.Height := 44;
   PnlBottom.BevelOuter := bvNone;
@@ -436,6 +476,51 @@ begin
   Obj := FClb.Items.Objects[ARow];
   if Obj = nil then Exit;
   Result := NativeInt(Obj) - 1;
+end;
+
+procedure TExtractInterfaceDialog.DoChangeBaseClick(Sender: TObject);
+begin
+  if FChkChangeBase.Checked then
+    FInfo.ChangeBaseTo := FInfo.IInterface.SuggestedAncestor
+  else
+    FInfo.ChangeBaseTo := '';
+end;
+
+procedure TExtractInterfaceDialog.RefreshIInterfaceHint;
+begin
+  if (FPnlIInterface = nil) or (FLblIInterface = nil) then Exit;
+  FPnlIInterface.Visible := not FInfo.IInterface.Ok;
+  if FInfo.IInterface.Ok then Exit;
+
+  FLblIInterface.Caption :=
+    'This class cannot implement an interface as it stands: ' +
+    FInfo.IInterface.Reason + '. The extracted interface is written either ' +
+    'way, but the class will not compile until that is fixed.';
+  if FInfo.IInterface.SuggestedAncestor <> '' then
+  begin
+    FChkChangeBase.Visible := True;
+    // DELIBERATELY NOT pre-ticked: TInterfacedObject reference-counts the
+    // instance, so an existing Free call becomes a double free. That is a
+    // second reading, and this project only pre-ticks what has none.
+    FChkChangeBase.Checked := False;
+    FChkChangeBase.Caption := Format('Derive %s from %s - it then frees ' +
+      'itself when the last interface reference drops, so explicit Free ' +
+      'calls have to go', [FInfo.ClassName, FInfo.IInterface.SuggestedAncestor]);
+  end
+  else
+  begin
+    FChkChangeBase.Visible := False;
+    // The label takes the checkbox's row: there is nothing to tick here,
+    // the offer is another command.
+    FLblIInterface.Height := 54;
+    // The offer is written as a clause, so it starts lowercase - here it
+    // begins a sentence of its own (seen in the headless render).
+    var Offer := FInfo.IInterface.Offer;
+    if Offer <> '' then Offer[1] := UpCase(Offer[1]);
+    FLblIInterface.Caption := FLblIInterface.Caption + ' ' + Offer +
+      ' ("Add IInterface support to class" in the Interfaces group does ' +
+      'exactly that).';
+  end;
 end;
 
 procedure TExtractInterfaceDialog.RefreshPreview;

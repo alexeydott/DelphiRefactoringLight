@@ -3638,7 +3638,7 @@ end;
 // interface to the class' ancestor list.
 function ToolExtractInterface(AArgs: TJSONObject; AStop: THandle): string;
 var
-  F, IntfName, Target, Err, RunErr, Text: string;
+  F, IntfName, Target, Err, RunErr, Text, NewBase: string;
   L1: Integer;
   Members: TArray<string>;
   AddExisting, DoApply, Ok: Boolean;
@@ -3654,6 +3654,7 @@ begin
   Target := Trim(ArgStr(AArgs, 'target_file'));
   AddExisting := ArgBool(AArgs, 'add_to_existing');
   DoApply := ArgBool(AArgs, 'apply');
+  NewBase := Trim(ArgStr(AArgs, 'change_base_to'));
   Members := nil;
   var MArr := AArgs.GetValue<TJSONArray>('members', nil);
   if MArr <> nil then
@@ -3664,7 +3665,7 @@ begin
     procedure
     begin
       Ok := ExtractInterfaceHeadless(F, L1, AddExisting, IntfName, Target,
-        Members, not DoApply, Info, Text, RunErr);
+        Members, not DoApply, Info, Text, RunErr, NewBase);
     end, not DoApply, AStop, Err, 300000) then Exit(McpErr(Err));
   if not Ok then Exit(McpErr(RunErr));
   var Sel := TJSONArray.Create;
@@ -3683,15 +3684,46 @@ begin
   else
     Res.AddPair('target', Info.TargetFile);
   Res.AddPair('interfaceText', Text);
+  // Issue #46: the extracted interface can look perfect and the class
+  // still not compile, because a TObject descendant does not implement
+  // IInterface. The verdict is part of EVERY answer - a caller cannot
+  // check this for itself, and the compiler says it only afterwards.
+  begin
+    var II := TJSONObject.Create;
+    II.AddPair('satisfied', TJSONBool.Create(Info.IInterface.Ok));
+    II.AddPair('baseClass', Info.IInterface.BaseClass);
+    II.AddPair('reason', Info.IInterface.Reason);
+    if not Info.IInterface.Ok then
+    begin
+      var Miss := TJSONArray.Create;
+      for var M in Info.IInterface.Missing do Miss.Add(M);
+      II.AddPair('missing', Miss);
+      II.AddPair('offer', Info.IInterface.Offer);
+      if Info.IInterface.SuggestedAncestor <> '' then
+        II.AddPair('suggestedAncestor', Info.IInterface.SuggestedAncestor)
+      else
+        II.AddPair('tool', 'add_iinterface');
+    end;
+    if NewBase <> '' then
+      II.AddPair('changedBaseTo', NewBase);
+    Res.AddPair('iinterface', II);
+  end;
   if DoApply then
     Res.AddPair('note', 'The interface was written, the class got it in its ' +
       'ancestor list and the uses clauses were updated. Files open in the IDE ' +
-      'were changed in the buffer (not saved).')
+      'were changed in the buffer (not saved).' +
+      IfThen(not Info.IInterface.Ok,
+        ' BUT the class cannot implement an interface as it stands: ' +
+        Info.IInterface.Reason + ' - ' + Info.IInterface.Offer +
+        ' ("iinterface" says how).'))
   else
     Res.AddPair('note', 'Nothing was written. "interfaceText" is what the ' +
       'interface would look like; "members" what it would carry (pass ' +
       '"members" to choose, the default is every public and published method ' +
-      'and property). Call again with apply=true to write it.');
+      'and property). Call again with apply=true to write it.' +
+      IfThen(not Info.IInterface.Ok,
+        ' Read "iinterface" first: the class cannot implement an interface ' +
+        'as it stands.'));
   Result := McpOk(Res);
 end;
 

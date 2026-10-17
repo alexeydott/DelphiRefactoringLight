@@ -1020,7 +1020,9 @@ const
     'interface in its ancestor list and both uses clauses are updated. ' +
     'add_to_existing=true adds the members to an interface that already exists ' +
     '(\"interface_name\"). apply=false (the default) answers with the interface text ' +
-    'that would be written.","inputSchema":{"type":"object","properties":{"file":' +
+    'that would be written. The answer also says whether the class can implement an ' +
+    'interface at all - a TObject descendant provides no IInterface.",' +
+    '"inputSchema":{"type":"object","properties":{"file":' +
     '{"type":"string"},"line":{"type":"integer","description":"1-based line inside ' +
     'or at the class declaration."},"interface_name":{"type":"string","description":' +
     '"Name of the interface. Default: the class name with T replaced by I. Required ' +
@@ -1028,6 +1030,12 @@ const
     'unit (path or a name next to the source)."},"members":{"type":"array","items":' +
     '{"type":"string"},"description":"Member names to include. Default: every public ' +
     'and published method and property."},"add_to_existing":{"type":"boolean"},' +
+    '"change_base_to":{"type":"string","description":"A base class to derive from ' +
+    'instead, applied with the extraction. A class that does not provide IInterface ' +
+    'cannot implement the extracted interface at all - the answer field ' +
+    '\"iinterface\" says so and names what to pass here (usually ' +
+    'TInterfacedObject), or points at add_iinterface when the ancestor must ' +
+    'stay."},' +
     ApplyProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
     '{"name":"add_iinterface","description":"Adds IInterface support to a class that ' +

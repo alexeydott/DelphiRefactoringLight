@@ -46,6 +46,60 @@ uses
 type
   TInterfaceMode = (eimExtractNew, eimAddToExisting);
 
+  /// <summary>What a class needs before it can implement an interface at
+  ///  all. Extracting one rewrites the class header to "TFoo = class(TBase,
+  ///  IFoo)", and that only compiles when the class provides IInterface's
+  ///  three methods - a TObject descendant does not (issue #46: the
+  ///  extracted interface looked right and the class stopped
+  ///  compiling).</summary>
+  TIInterfaceNeed = (
+    /// <summary>The class or one of its ancestors provides IInterface.</summary>
+    iinSatisfied,
+    /// <summary>A TObject-like base: deriving from TInterfacedObject (or
+    ///  TInterfacedPersistent) is the smallest fix.</summary>
+    iinChangeAncestor,
+    /// <summary>Another base, or a class that already implements PART of
+    ///  IInterface by hand: the methods belong in the class itself, which
+    ///  is what "Add IInterface support to class" writes.</summary>
+    iinAddSupport,
+    /// <summary>The base class could not be resolved - said so rather than
+    ///  guessed at.</summary>
+    iinUnknownBase);
+
+  /// <summary>What is known about a base class whose own text is not at
+  ///  hand. ibkOther means RESOLVED and nothing on its chain implements
+  ///  IInterface - changing the ancestor would drop that chain, so only
+  ///  adding the methods is left.</summary>
+  TIInterfaceBaseKind = (ibkUnknown, ibkImplements, ibkTObjectLike, ibkOther);
+
+  /// <summary>Resolves a base class NAME: does it, or one of its own
+  ///  ancestors, implement IInterface? Injected, because the answer needs
+  ///  the identifier index and the type graph while this unit stays pure.
+  ///  nil = only the RTL names this unit knows are decided.</summary>
+  TIInterfaceBaseResolver = reference to function(
+    const ABaseClass: string): TIInterfaceBaseKind;
+
+  TIInterfaceVerdict = record
+    Need: TIInterfaceNeed;
+    /// <summary>The first entry of the ancestor list; '' for an implicit
+    ///  TObject ("TFoo = class").</summary>
+    BaseClass: string;
+    /// <summary>For iinChangeAncestor: what to derive from instead.</summary>
+    SuggestedAncestor: string;
+    /// <summary>Of QueryInterface / _AddRef / _Release: what the class does
+    ///  not declare itself.</summary>
+    Missing: TArray<string>;
+    /// <summary>The ancestor list already names IInterface / IUnknown. With
+    ///  a Need other than iinSatisfied that means the class does not
+    ///  compile as it stands.</summary>
+    ListsInterface: Boolean;
+    /// <summary>One sentence: what is the case. Shown as it is.</summary>
+    Reason: string;
+    /// <summary>One sentence: what can be done about it.</summary>
+    Offer: string;
+    function Ok: Boolean;
+  end;
+
   TMemberKind = (mkField, mkProperty, mkMethod);
 
   TMemberVisibility = (mvUnknown, mvStrictPrivate, mvPrivate, mvStrictProtected,
@@ -144,6 +198,15 @@ type
     ///  interface members (TButton, TListView, ...) resolves out of the
     ///  box. eimAddToExisting ignores this.</summary>
     NewUnitUses: TArray<string>;
+    /// <summary>Filled by the wizard (ParseClassAtLine cannot - the rule
+    ///  needs a base-class resolver): what the class needs before it can
+    ///  carry an interface at all.</summary>
+    IInterface: TIInterfaceVerdict;
+    /// <summary>A base class to derive from instead, applied with the
+    ///  extraction and BEFORE the interface joins the ancestor list (which
+    ///  would otherwise become the first entry this replaces). '' = leave
+    ///  the ancestor alone.</summary>
+    ChangeBaseTo: string;
   end;
 
   TExtractInterfaceEngine = class
@@ -265,6 +328,31 @@ type
     ///  virtual, else ''. Only QueryInterface is virtual in TComponent;
     ///  its _AddRef and _Release are static (E2170 on override).</summary>
     class function IInterfaceDirective(const ABaseClass, AMethodName: string): string;
+
+    /// <summary>What this unit knows about an RTL base class, measured in
+    ///  the shipped sources rather than assumed. ibkUnknown for everything
+    ///  else - that is what the resolver is for.</summary>
+    class function KnownIInterfaceBaseKind(
+      const ABaseClass: string): TIInterfaceBaseKind;
+
+    /// <summary>Whether the class declared at AClassDeclLine can implement
+    ///  an interface, and what to do when it cannot. The class's own three
+    ///  methods decide first (a hand-written delegation needs no special
+    ///  base at all), then the base class - known names before AResolver,
+    ///  because the known answer is exact and free.</summary>
+    class function IInterfaceNeedOf(const AFileLines: TArray<string>;
+      AClassDeclLine, AClassEndLine: Integer; const AClassName: string;
+      const AResolver: TIInterfaceBaseResolver = nil): TIInterfaceVerdict;
+
+    /// <summary>The class header with ANewBase as its base class: an empty
+    ///  list is created after the class modifiers ("class abstract(TBase)"
+    ///  is where Delphi puts it), an existing one has its FIRST entry
+    ///  replaced and keeps every interface behind it. Refuses a forward
+    ///  declaration, a "class of", a list that is not closed on this line
+    ///  and a header that already names ANewBase - a refusal says why, and
+    ///  nothing is rewritten on a guess.</summary>
+    class function PlanBaseClassChange(const AHeaderLine, ANewBase: string;
+      out ANewLine, AWhy: string): Boolean;
   end;
 
   /// <summary>Tiny utility: scans an entire Pascal source file and yields
@@ -1451,6 +1539,248 @@ begin
   if not SameText(Info.ClassName, AClassName) then Exit;
   ADeclLine := Info.ClassDeclLine;
   AEndLine := Info.ClassEndLine;
+  Result := True;
+end;
+
+{ TIInterfaceVerdict }
+
+function TIInterfaceVerdict.Ok: Boolean;
+begin
+  Result := Need = iinSatisfied;
+end;
+
+class function TExtractInterfaceEngine.KnownIInterfaceBaseKind(
+  const ABaseClass: string): TIInterfaceBaseKind;
+const
+  // MEASURED in the shipped RTL sources, not assumed: System.pas declares
+  // TInterfacedObject, TContainedObject, TClassHelperBase and
+  // TNoRefCountObject with IInterface in their ancestor list,
+  // System.Classes TInterfacedPersistent and TComponent; TAggregatedObject
+  // is "class(TObject)" and declares the three methods itself (so the
+  // ancestor list alone would have answered wrongly there), and
+  // TSingletonImplementation gets them from TNoRefCountObject.
+  Implementers: array[0..9] of string = ('TInterfacedObject',
+    'TAggregatedObject', 'TContainedObject', 'TClassHelperBase',
+    'TNoRefCountObject', 'TSingletonImplementation', 'TInterfacedPersistent',
+    'TComponent', 'TInterfaceList', 'TStreamAdapter');
+begin
+  // An implicit base IS TObject ("TFoo = class").
+  if Trim(ABaseClass) = '' then Exit(ibkTObjectLike);
+  if SameText(ABaseClass, 'TObject') or SameText(ABaseClass, 'TPersistent') then
+    Exit(ibkTObjectLike);
+  for var N in Implementers do
+    if SameText(ABaseClass, N) then Exit(ibkImplements);
+  Result := ibkUnknown;
+end;
+
+class function TExtractInterfaceEngine.IInterfaceNeedOf(
+  const AFileLines: TArray<string>;
+  AClassDeclLine, AClassEndLine: Integer; const AClassName: string;
+  const AResolver: TIInterfaceBaseResolver): TIInterfaceVerdict;
+const
+  Methods: array[0..2] of string = ('QueryInterface', '_AddRef', '_Release');
+var
+  Have: TArray<string>;
+  Kind: TIInterfaceBaseKind;
+  BaseName: string;
+begin
+  Result := Default(TIInterfaceVerdict);
+  Result.Need := iinSatisfied;
+  if (AClassDeclLine < 1) or (AClassDeclLine > Length(AFileLines)) then
+  begin
+    Result.Need := iinUnknownBase;
+    Result.Reason := 'the class declaration is outside the file';
+    Exit;
+  end;
+
+  for var A in ParseClassAncestors(AFileLines[AClassDeclLine - 1],
+    Result.BaseClass) do
+    if SameText(A, 'IInterface') or SameText(A, 'IUnknown') then
+      Result.ListsInterface := True;
+  if Result.BaseClass = '' then BaseName := 'TObject' else BaseName := Result.BaseClass;
+
+  for var M in Methods do
+    if ClassHasMethodDecl(AFileLines, AClassDeclLine, AClassEndLine, M) then
+      Have := Have + [M]
+    else
+      Result.Missing := Result.Missing + [M];
+
+  if Length(Result.Missing) = 0 then
+  begin
+    Result.Reason := Format(
+      '%s declares QueryInterface, _AddRef and _Release itself', [AClassName]);
+    Exit;
+  end;
+
+  // Known names first: the answer is exact and costs nothing, and it keeps
+  // a resolver from having to be right about the RTL.
+  Kind := KnownIInterfaceBaseKind(Result.BaseClass);
+  if (Kind = ibkUnknown) and Assigned(AResolver) then
+    Kind := AResolver(Result.BaseClass);
+
+  if Kind = ibkImplements then
+  begin
+    Result.Reason := Format('%s descends from %s, which implements IInterface',
+      [AClassName, BaseName]);
+    Exit;
+  end;
+
+  // PART of IInterface by hand is a deliberate implementation (a
+  // delegation, a no-refcount object): swapping its ancestor would collide
+  // with what is already there, so the only honest offer is to complete it.
+  if Length(Have) > 0 then
+  begin
+    Result.Need := iinAddSupport;
+    Result.Reason := Format('%s declares %s, but not %s',
+      [AClassName, string.Join(', ', Have), string.Join(', ', Result.Missing)]);
+    Result.Offer := 'complete the missing method(s) by hand - "Add IInterface ' +
+      'support to class" would redeclare what is already there';
+  end
+  else
+    case Kind of
+      ibkTObjectLike:
+        begin
+          Result.Need := iinChangeAncestor;
+          if SameText(Result.BaseClass, 'TPersistent') then
+            Result.SuggestedAncestor := 'TInterfacedPersistent'
+          else
+            Result.SuggestedAncestor := 'TInterfacedObject';
+          Result.Reason := Format('%s descends from %s, which does not ' +
+            'implement IInterface - QueryInterface, _AddRef and _Release are ' +
+            'missing', [AClassName, BaseName]);
+          Result.Offer := Format('derive it from %s, or add IInterface ' +
+            'support to the class itself', [Result.SuggestedAncestor]);
+        end;
+      ibkOther:
+        begin
+          Result.Need := iinAddSupport;
+          Result.Reason := Format('%s descends from %s, and nothing on that ' +
+            'chain implements IInterface', [AClassName, BaseName]);
+          Result.Offer := Format('add IInterface support to the class - ' +
+            'deriving from TInterfacedObject instead would drop %s', [BaseName]);
+        end;
+    else
+      Result.Need := iinUnknownBase;
+      Result.Reason := Format('%s descends from %s, and whether that ' +
+        'implements IInterface could not be determined here',
+        [AClassName, BaseName]);
+      Result.Offer := 'if the compiler reports the three IInterface methods ' +
+        'as missing, add IInterface support to the class';
+    end;
+
+  if not Result.Ok then
+    if Result.ListsInterface then
+      Result.Reason := Result.Reason +
+        ' (its ancestor list already names IInterface, so it does not compile ' +
+        'as it stands)';
+end;
+
+class function TExtractInterfaceEngine.PlanBaseClassChange(
+  const AHeaderLine, ANewBase: string; out ANewLine, AWhy: string): Boolean;
+var
+  Code, Rest: string;
+  KP, P, Q, Start, Stop: Integer;
+begin
+  Result := False;
+  ANewLine := '';
+  AWhy := '';
+  if Trim(ANewBase) = '' then
+  begin
+    AWhy := 'no base class given';
+    Exit;
+  end;
+  Code := StripLineComment(AHeaderLine);
+  KP := TypeKeywordPos(Code, ['class']);
+  if KP = 0 then
+  begin
+    AWhy := 'the line does not declare a class';
+    Exit;
+  end;
+  Rest := Trim(Copy(Code, KP + Length('class'), MaxInt));
+  // "TFoo = class;" is a forward declaration and "TFoo = class of TBar" a
+  // metaclass - neither has a base class to change. An EMPTY rest is
+  // neither: that is a class whose body follows on the next lines, which
+  // is the shape issue #46 reported.
+  if StartsStr(';', Rest) then
+  begin
+    AWhy := 'a forward declaration has no ancestor list';
+    Exit;
+  end;
+  if StartsText('of ', Rest) then
+  begin
+    AWhy := 'a class reference type has no ancestor list';
+    Exit;
+  end;
+
+  P := 0;
+  for var I := KP + Length('class') to Length(Code) do
+    if Code[I] = '(' then
+    begin
+      P := I;
+      Break;
+    end
+    else if Code[I] = ')' then
+      Break;
+
+  if P = 0 then
+  begin
+    // No list yet: Delphi writes the parentheses AFTER the class
+    // modifiers - "TFoo = class abstract(TBase)".
+    Stop := KP + Length('class');
+    while True do
+    begin
+      var I := Stop;
+      while (I <= Length(Code)) and CharInSet(Code[I], [' ', #9]) do Inc(I);
+      var W := '';
+      while (I <= Length(Code)) and IsIdentChar(Code[I]) do
+      begin
+        W := W + Code[I];
+        Inc(I);
+      end;
+      if SameText(W, 'abstract') or SameText(W, 'sealed') then
+        Stop := I
+      else
+        Break;
+    end;
+    ANewLine := Copy(AHeaderLine, 1, Stop - 1) + '(' + ANewBase + ')' +
+      Copy(AHeaderLine, Stop, MaxInt);
+    Exit(True);
+  end;
+
+  Q := 0;
+  for var I := P + 1 to Length(Code) do
+    if Code[I] = ')' then
+    begin
+      Q := I;
+      Break;
+    end;
+  if Q = 0 then
+  begin
+    AWhy := 'the ancestor list is not closed on the class header line';
+    Exit;
+  end;
+
+  // The first entry is the base class (Delphi allows only one), so its
+  // span is what gets replaced - every interface behind it stays.
+  Start := P + 1;
+  while (Start < Q) and CharInSet(Code[Start], [' ', #9]) do Inc(Start);
+  Stop := Start;
+  while (Stop < Q) and (Code[Stop] <> ',') do Inc(Stop);
+  var Current := Trim(Copy(Code, Start, Stop - Start));
+  if Current = '' then
+  begin
+    // "TFoo = class()" - nothing to replace, so put the base in.
+    ANewLine := Copy(AHeaderLine, 1, P) + ANewBase +
+      Copy(AHeaderLine, P + 1, MaxInt);
+    Exit(True);
+  end;
+  if SameText(Current, ANewBase) then
+  begin
+    AWhy := Format('it already derives from %s', [ANewBase]);
+    Exit;
+  end;
+  ANewLine := Copy(AHeaderLine, 1, Start - 1) + ANewBase +
+    Copy(AHeaderLine, Start + Length(Current), MaxInt);
   Result := True;
 end;
 

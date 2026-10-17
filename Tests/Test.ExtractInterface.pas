@@ -65,12 +65,29 @@ type
     ///  reading a real method was rewritten instead of being emitted as it
     ///  stands.</summary>
     [Test] procedure ArrayPropertyKeepsItsIndexList_Issue46;
+
+    /// <summary>Issue #46, the second half: the extracted interface was
+    ///  right and the class no longer compiled, because a TObject
+    ///  descendant does not implement IInterface. Who provides it is
+    ///  decided from evidence - the class's own three methods, then the
+    ///  base class - and a base nobody can resolve is reported as
+    ///  unknown instead of being guessed at.</summary>
+    [Test] procedure WhoProvidesIInterfaceIsDecidedFromEvidence_Issue46;
+    /// <summary>And the offer for a TObject-like base: the header is
+    ///  rewritten to derive from TInterfacedObject, the interfaces
+    ///  behind the base stay, the modifier keeps its place, and the
+    ///  shapes that have no base class are refused with a reason.</summary>
+    [Test] procedure TheAncestorChangeKeepsEverythingElse_Issue46;
+    /// <summary>And the tool declares the ancestor choice: an argument a
+    ///  schema does not list is dropped before the handler sees it, and
+    ///  nobody is told (1.16.11).</summary>
+    [Test] procedure TheExtractToolDeclaresTheAncestorChoice_Issue46;
   end;
 
 implementation
 
 uses
-  System.SysUtils, System.IOUtils, Expert.ExtractInterface;
+  System.SysUtils, System.IOUtils, Expert.ExtractInterface, Mcp.Protocol;
 
 procedure TExtractInterfaceTests.ClassNameContainingClass_IsTheClassParsed;
 var
@@ -329,6 +346,181 @@ begin
     '  end;',
     TExtractInterfaceEngine.BuildInterfaceText(Info), False,
     'the escaped property keeps its & and its getter drops it');
+end;
+
+procedure TExtractInterfaceTests.WhoProvidesIInterfaceIsDecidedFromEvidence_Issue46;
+var
+  V: TIInterfaceVerdict;
+
+  function Parse(const ALines: TArray<string>;
+    const AResolver: TIInterfaceBaseResolver = nil): TIInterfaceVerdict;
+  var
+    Info: TExtractInterfaceInfo;
+  begin
+    Assert.IsTrue(TExtractInterfaceEngine.ParseClassAtLine(ALines, '', 4, Info),
+      'the fixture must declare a class around line 4');
+    Result := TExtractInterfaceEngine.IInterfaceNeedOf(ALines, Info.ClassDeclLine,
+      Info.ClassEndLine, Info.ClassName, AResolver);
+  end;
+
+begin
+  // The reported shape: issue #46's class, which is a plain TObject
+  // descendant - "TMyClass = class" with no list at all.
+  V := Parse(['unit U;', 'interface', 'type', '  TMyClass = class',
+    '  private', '    function GetTest(AIndex: Integer): Integer;',
+    '  public', '    property Test[ AIndex: Integer]: Integer read GetTest;',
+    '  end;', 'implementation', 'end.']);
+  Assert.AreEqual(Integer(Ord(iinChangeAncestor)), Integer(Ord(V.Need)),
+    'a TObject descendant cannot carry an interface - the reported case');
+  Assert.AreEqual('TInterfacedObject', V.SuggestedAncestor);
+  Assert.AreEqual(3, Integer(Length(V.Missing)), 'all three methods are missing');
+  Assert.IsTrue(V.Reason.Contains('TMyClass') and V.Reason.Contains('TObject'),
+    'the reason names the class and its base: ' + V.Reason);
+  Assert.IsTrue(V.Offer.Contains('TInterfacedObject'), 'and the offer: ' + V.Offer);
+
+  // A base that implements it - measured in the RTL, not assumed.
+  for var Base in ['TInterfacedObject', 'TComponent', 'TInterfacedPersistent',
+    'TAggregatedObject', 'TSingletonImplementation'] do
+  begin
+    V := Parse(['unit U;', 'interface', 'type',
+      '  TMyClass = class(' + Base + ')', '    procedure A;', '  end;',
+      'implementation', 'end.']);
+    Assert.IsTrue(V.Ok, Base + ' implements IInterface, so there is nothing to report');
+  end;
+
+  // TPersistent does NOT (it is TComponent that lists IInterface), and
+  // its own interfaced descendant is the one to suggest.
+  V := Parse(['unit U;', 'interface', 'type', '  TMyClass = class(TPersistent)',
+    '    procedure A;', '  end;', 'implementation', 'end.']);
+  Assert.AreEqual(Integer(Ord(iinChangeAncestor)), Integer(Ord(V.Need)));
+  Assert.AreEqual('TInterfacedPersistent', V.SuggestedAncestor);
+
+  // The class itself may implement IInterface by hand - TAggregatedObject
+  // does exactly that in the RTL, without listing it.
+  V := Parse(['unit U;', 'interface', 'type', '  TMyClass = class',
+    '  protected',
+    '    function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;',
+    '    function _AddRef: Integer; stdcall;',
+    '    function _Release: Integer; stdcall;',
+    '  end;', 'implementation', 'end.']);
+  Assert.IsTrue(V.Ok, 'a hand-written implementation needs no special base');
+
+  // PART of it by hand is deliberate: swapping the ancestor would collide
+  // with what is there, so only completing it is offered.
+  V := Parse(['unit U;', 'interface', 'type', '  TMyClass = class',
+    '  protected',
+    '    function _AddRef: Integer; stdcall;',
+    '    function _Release: Integer; stdcall;',
+    '  end;', 'implementation', 'end.']);
+  Assert.AreEqual(Integer(Ord(iinAddSupport)), Integer(Ord(V.Need)),
+    'two of three declared: the ancestor must not be swapped');
+  Assert.AreEqual(1, Integer(Length(V.Missing)));
+  Assert.AreEqual('QueryInterface', V.Missing[0]);
+
+  // A base the index cannot resolve is reported as unknown, never guessed.
+  V := Parse(['unit U;', 'interface', 'type', '  TMyClass = class(TSomeVendorBase)',
+    '    procedure A;', '  end;', 'implementation', 'end.']);
+  Assert.AreEqual(Integer(Ord(iinUnknownBase)), Integer(Ord(V.Need)),
+    'an unresolvable base is said to be unresolved');
+
+  // With a resolver it is decided: a chain that implements it is fine, a
+  // chain that does not gets the add-support offer - changing THAT
+  // ancestor would drop the vendor class.
+  V := Parse(['unit U;', 'interface', 'type', '  TMyClass = class(TSomeVendorBase)',
+    '    procedure A;', '  end;', 'implementation', 'end.'],
+    function(const ABase: string): TIInterfaceBaseKind
+    begin
+      Result := ibkImplements;
+    end);
+  Assert.IsTrue(V.Ok, 'the resolver found IInterface up the chain');
+
+  V := Parse(['unit U;', 'interface', 'type', '  TMyClass = class(TSomeVendorBase)',
+    '    procedure A;', '  end;', 'implementation', 'end.'],
+    function(const ABase: string): TIInterfaceBaseKind
+    begin
+      Result := ibkOther;
+    end);
+  Assert.AreEqual(Integer(Ord(iinAddSupport)), Integer(Ord(V.Need)));
+  Assert.IsTrue(V.Offer.Contains('TSomeVendorBase'),
+    'the offer says what a changed ancestor would drop: ' + V.Offer);
+
+  // An ancestor list that already names IInterface while nothing
+  // implements it does not compile - and the reason says so.
+  V := Parse(['unit U;', 'interface', 'type',
+    '  TMyClass = class(TObject, IInterface)', '    procedure A;', '  end;',
+    'implementation', 'end.']);
+  Assert.IsFalse(V.Ok);
+  Assert.IsTrue(V.ListsInterface);
+  Assert.IsTrue(V.Reason.Contains('does not compile'),
+    'listed but not implemented is named as such: ' + V.Reason);
+end;
+
+procedure TExtractInterfaceTests.TheAncestorChangeKeepsEverythingElse_Issue46;
+var
+  NewLine, Why: string;
+begin
+  // No list at all - the reported class.
+  Assert.IsTrue(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClass = class', 'TInterfacedObject', NewLine, Why), Why);
+  Assert.AreEqual('  TMyClass = class(TInterfacedObject)', NewLine);
+
+  // An existing base is replaced and the interfaces behind it stay.
+  Assert.IsTrue(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClass = class(TObject, IFoo, IBar)', 'TInterfacedObject',
+    NewLine, Why), Why);
+  Assert.AreEqual('  TMyClass = class(TInterfacedObject, IFoo, IBar)', NewLine);
+
+  // Delphi puts the parentheses AFTER the class modifier - measured in
+  // the RTL sources, where "= class abstract(" is how it is written.
+  Assert.IsTrue(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClass = class abstract', 'TInterfacedObject', NewLine, Why), Why);
+  Assert.AreEqual('  TMyClass = class abstract(TInterfacedObject)', NewLine);
+  Assert.IsTrue(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClass = class sealed(TObject)', 'TInterfacedObject', NewLine, Why), Why);
+  Assert.AreEqual('  TMyClass = class sealed(TInterfacedObject)', NewLine);
+
+  // A trailing comment belongs to the author, so it survives.
+  Assert.IsTrue(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClass = class(TObject) // the model', 'TInterfacedObject',
+    NewLine, Why), Why);
+  Assert.AreEqual('  TMyClass = class(TInterfacedObject) // the model', NewLine);
+
+  // And the shapes that have no base class, each with its reason.
+  Assert.IsFalse(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClass = class;', 'TInterfacedObject', NewLine, Why),
+    'a forward declaration has nothing to derive from');
+  Assert.IsTrue(Why.Contains('forward'), Why);
+  Assert.IsFalse(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClassRef = class of TMyClass', 'TInterfacedObject', NewLine, Why),
+    'a class reference is no class declaration');
+  Assert.IsFalse(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClass = class(TBase,', 'TInterfacedObject', NewLine, Why),
+    'a wrapped ancestor list is not rewritten from one line');
+  Assert.IsTrue(Why.Contains('not closed'), Why);
+  Assert.IsFalse(TExtractInterfaceEngine.PlanBaseClassChange(
+    '  TMyClass = class(TInterfacedObject, IFoo)', 'TInterfacedObject',
+    NewLine, Why), 'nothing to change');
+  Assert.IsTrue(Why.Contains('already'), Why);
+end;
+
+procedure TExtractInterfaceTests.TheExtractToolDeclaresTheAncestorChoice_Issue46;
+var
+  Args: TArray<string>;
+
+  function Declares(const AName: string): Boolean;
+  begin
+    Result := False;
+    for var A in Args do
+      if SameText(A, AName) then Exit(True);
+  end;
+
+begin
+  Args := KnownToolArguments('extract_interface');
+  Assert.IsTrue(Length(Args) > 0, 'the tool is in the shipped definitions');
+  // Exactly what ToolExtractInterface reads.
+  for var Needed in ['file', 'line', 'interface_name', 'target_file',
+    'members', 'add_to_existing', 'change_base_to', 'apply'] do
+    Assert.IsTrue(Declares(Needed), Needed + ' is declared');
 end;
 
 initialization
