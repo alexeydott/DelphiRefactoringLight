@@ -10,6 +10,11 @@ setlocal
 :: update without building anything).
 ::
 ::   release.cmd ["Title of the release"] [--draft] [--skip-tests] [--with-maps]
+::   release.cmd --upload-only [--skip-tests] [--with-maps]
+::
+:: --upload-only attaches the binaries to a release that EXISTS already -
+:: the case when the release was published from the web page and the files
+:: are added afterwards (which is how 2.0.1 happened).
 ::
 :: Nothing is published before the build and the test suite have passed, and
 :: the version comes from Source\Expert.Version.pas - the one place the four
@@ -26,6 +31,7 @@ set RL_TITLE=
 set RL_DRAFT=
 set RL_TESTS=1
 set RL_MAPS=0
+set RL_UPLOAD=0
 set RL_FAIL=
 
 :args
@@ -33,6 +39,7 @@ if "%~1"=="" goto :version
 if /i "%~1"=="--draft" set RL_DRAFT=--draft& shift & goto :args
 if /i "%~1"=="--skip-tests" set RL_TESTS=0& shift & goto :args
 if /i "%~1"=="--with-maps" set RL_MAPS=1& shift & goto :args
+if /i "%~1"=="--upload-only" set RL_UPLOAD=1& shift & goto :args
 if "%RL_TITLE%"=="" set RL_TITLE=%~1& shift & goto :args
 echo Unknown argument: %~1
 goto :usage
@@ -57,16 +64,38 @@ goto :state
 for /f "delims=" %%S in ('git -C "%RL_REPO%." status --porcelain') do set RL_DIRTY=1
 if defined RL_DIRTY echo The working tree has changes - commit them first.& goto :fail
 git -C "%RL_REPO%." rev-parse -q --verify "refs/tags/%RL_VER%" >nul
+if "%RL_UPLOAD%"=="1" goto :existing
 if not errorlevel 1 echo Tag %RL_VER% already exists - bump the version first.& goto :fail
 for /f "delims=" %%H in ('git -C "%RL_REPO%." rev-parse HEAD') do set RL_HEAD=%%H
 for /f "delims=" %%U in ('git -C "%RL_REPO%." rev-parse "@{u}"') do set RL_UP=%%U
 if not "%RL_HEAD%"=="%RL_UP%" echo HEAD is not pushed - push first, a release tags the remote.& goto :fail
 goto :notes
 
+:: --upload-only: the release is there, so the question is a different one -
+:: do these binaries belong to the commit the tag names? Anything under
+:: Source, Packages, Mcp or Standalone that changed since the tag would make
+:: the build something else than what was released, and that is refused
+:: rather than explained away. Everything else (a changelog, this script)
+:: cannot reach the artefacts.
+:existing
+if errorlevel 1 echo There is no tag %RL_VER% - without --upload-only this script creates it.& goto :fail
+gh release view %RL_VER% >nul 2>&1
+if errorlevel 1 echo There is no release %RL_VER% to upload to.& goto :fail
+for /f "delims=" %%F in ('git -C "%RL_REPO%." diff --name-only "%RL_VER%..HEAD"') do call :srcdiff "%%F"
+if defined RL_SRCDIFF echo Sources changed since the tag %RL_VER% (%RL_SRCDIFF%) - check out the tag to build it.& goto :fail
+echo Release %RL_VER% exists, and no source changed since its tag.
+goto :build
+
+:srcdiff
+echo %~1| findstr /i /b /c:"Source/" /c:"Packages/" /c:"Mcp/" /c:"Standalone/" >nul
+if not errorlevel 1 set RL_SRCDIFF=%~1
+exit /b 0
+
 :: ----------------------------------------------------------------- notes --
 :: ONE source of truth: the release body is the CHANGELOG section of this
 :: version, so the page and the repository can never drift apart.
 :notes
+if "%RL_UPLOAD%"=="1" goto :build
 set RL_NOTES=%RL_OUT%\notes-%RL_VER%.md
 if not exist "%RL_OUT%" mkdir "%RL_OUT%"
 :: BOTH ends are pinned to UTF-8: Windows PowerShell reads a file as ANSI by
@@ -136,10 +165,23 @@ exit /b 0
 
 :: --------------------------------------------------------------- publish --
 :publish
+if "%RL_UPLOAD%"=="1" goto :upload
 echo.
 echo Creating release %RL_VER% %RL_DRAFT%
 gh release create %RL_VER% --title "%RL_TITLE%" --notes-file "%RL_NOTES%" %RL_DRAFT% %RL_ASSETS%
 if errorlevel 1 echo gh failed - the release was NOT created.& goto :fail
+goto :verify
+
+:: No --clobber: replacing a file somebody may already have downloaded is a
+:: decision, not a retry.
+:upload
+echo.
+echo Attaching the binaries to release %RL_VER%
+gh release upload %RL_VER% %RL_ASSETS%
+if errorlevel 1 echo gh failed - nothing was attached. An asset of that name may already be there; remove it on the release page first.& goto :fail
+goto :verify
+
+:verify
 echo.
 echo Attached:
 gh release view %RL_VER% --json assets -q ".assets[] | .name + \"  \" + (.size|tostring) + \" bytes\""
