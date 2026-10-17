@@ -62,6 +62,8 @@ uses
   // report 2026-10-15: Delphi installed by another account).
   DIH.Types in '..\dih\DIH.Types.pas',
   DIH.Placeholders in '..\dih\DIH.Placeholders.pas',
+  DIH.Logger in '..\dih\DIH.Logger.pas',
+  DIH.FileOps in '..\dih\DIH.FileOps.pas',
   Expert.ReferenceKind in '..\Source\Expert.ReferenceKind.pas',
   Expert.SemanticReplace in '..\Source\Expert.SemanticReplace.pas',
   Mcp.Protocol in '..\Source\Mcp.Protocol.pas',

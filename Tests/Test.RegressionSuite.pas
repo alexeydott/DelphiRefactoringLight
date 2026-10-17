@@ -734,6 +734,12 @@ type
   TInstallOutputRootTests = class
   public
     [Test] procedure ABuildNeverWritesWhereItMayNot;
+    /// <summary>Installing over a file somebody is RUNNING. Windows
+    ///  refuses to overwrite such a file but allows renaming it, and an
+    ///  installer that does not know this reports success without
+    ///  replacing anything - which is how a stale MCP bridge survived four
+    ///  versions (1.22.1).</summary>
+    [Test] procedure AFileInUseIsMovedAsideAndReplaced;
   end;
 
   [TestFixture]
@@ -791,7 +797,7 @@ uses
   Expert.MoveToUnit, Expert.SafeDeletePlan, Expert.McpTools, Expert.WithRewriter,
   Expert.SemanticReplace, Expert.SelectionValidator, Expert.ExtractMethod,
   Expert.SignatureEdit, Expert.MethodEdit, System.StrUtils,
-  Expert.DebugConsistency, DIH.Placeholders;
+  Expert.DebugConsistency, DIH.Placeholders, DIH.FileOps;
 
 const
   NL = sLineBreak;
@@ -6222,6 +6228,65 @@ end;
 
 { TInstallOutputRootTests }
 
+
+procedure TInstallOutputRootTests.AFileInUseIsMovedAsideAndReplaced;
+var
+  Dir, Target, Source, Aside: string;
+  H: THandle;
+  Failed: Boolean;
+begin
+  Dir := TPath.Combine(TPath.GetTempPath, 'dih_inuse_' + TGUID.NewGuid.ToString);
+  TDirectory.CreateDirectory(Dir);
+  try
+    Target := TPath.Combine(Dir, 'tool.exe');
+    Source := TPath.Combine(Dir, 'new.bin');
+    TFile.WriteAllText(Target, 'OLD');
+    TFile.WriteAllText(Source, 'NEW');
+
+    // Exactly the shape a RUNNING image has: readers and renames are
+    // allowed, writers are not. FILE_SHARE_DELETE is what makes the move
+    // possible while the file is in use - a test that locks it outright
+    // would measure something else.
+    H := CreateFile(PChar(Target), GENERIC_READ,
+      FILE_SHARE_READ or FILE_SHARE_DELETE, nil, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL, 0);
+    Assert.AreNotEqual(INVALID_HANDLE_VALUE, H, 'the probe must hold the file');
+    try
+      // The plain copy has to fail, or the test proves nothing.
+      Failed := False;
+      try
+        TFile.Copy(Source, Target, True);
+      except
+        Failed := True;
+      end;
+      Assert.IsTrue(Failed, 'a file in use cannot simply be overwritten');
+
+      Assert.IsTrue(ReplaceFilePossiblyInUse(Source, Target, Aside),
+        'but it can be replaced');
+      Assert.AreEqual('NEW', TFile.ReadAllText(Target), False,
+        'the new bytes are in place');
+      Assert.IsTrue(Aside <> '', 'and the old file was moved aside');
+      Assert.IsTrue(TFile.Exists(Aside), 'under a name that is still there');
+      Assert.AreEqual('OLD', TFile.ReadAllText(Aside), False,
+        'carrying what was installed before');
+      // The aside name must be UNIQUE: a fixed ".old" is held by whatever
+      // was started from it last time, and then the move has nowhere to go.
+      Assert.AreNotEqual(Target + '.old', Aside, False,
+        'a fixed aside name is what blocked the next install');
+    finally
+      CloseHandle(H);
+    end;
+
+    // With nothing holding it, the target is simply overwritten and no
+    // copy is left behind.
+    TFile.WriteAllText(Source, 'NEWER');
+    Assert.IsTrue(ReplaceFilePossiblyInUse(Source, Target, Aside), 'plain copy');
+    Assert.AreEqual('', Aside, False, 'nothing to move aside');
+    Assert.AreEqual('NEWER', TFile.ReadAllText(Target), False, 'replaced');
+  finally
+    TDirectory.Delete(Dir, True);
+  end;
+end;
 
 procedure TInstallOutputRootTests.ABuildNeverWritesWhereItMayNot;
 const

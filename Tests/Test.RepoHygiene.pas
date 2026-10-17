@@ -201,8 +201,8 @@ end;
 
 const
   // every batch script of the repository that uses labels
-  ScriptFiles: array[0..4] of string = ('install.cmd', 'uninstall.cmd',
-    'rebuild.cmd', 'Mcp\buildmcp.cmd', 'dih\builddih.cmd');
+  ScriptFiles: array[0..3] of string = ('install.cmd', 'uninstall.cmd',
+    'rebuild.cmd', 'dih\builddih.cmd');
 
 // A label line is ':name' - ':: text' is a comment, which is why the second
 // character decides.
@@ -226,23 +226,26 @@ end;
 
 procedure TRepoHygieneTests.TheBridgeIsMovedAsideUnderAUniqueName;
 var
-  Lines: TArray<string>;
-  MoveLine: string;
+  Config, Install: string;
 begin
-  var F := TPath.Combine(TPath.Combine(RepoRoot, 'Mcp'), 'buildmcp.cmd');
-  Assert.IsTrue(TFile.Exists(F), 'buildmcp.cmd must be there: ' + F);
-  Lines := TFile.ReadAllText(F).Replace(#13#10, #10).Split([#10]);
-  for var L in Lines do
-    if L.TrimLeft.StartsWith('if exist "%TARGET%" move', True) or
-       L.TrimLeft.StartsWith('move /y "%TARGET%"', True) then
-      MoveLine := L.Trim;
-  Assert.AreNotEqual('', MoveLine,
-    'the live exe must still be moved aside before the copy');
-  Assert.IsTrue(MoveLine.Contains('%RANDOM%'),
-    'and under a UNIQUE name, or an undeletable .old blocks the whole ' +
-    'install: ' + MoveLine);
-  Assert.IsFalse(MoveLine.Contains('"%TARGET%.old"'),
-    'the fixed name is exactly what broke it: ' + MoveLine);
+  // The behaviour this test was written for - moving a RUNNING exe aside
+  // under a unique name - lives in the installer now
+  // (DIH.FileOps.ReplaceFilePossiblyInUse), and
+  // TInstallOutputRootTests.AFileInUseIsMovedAsideAndReplaced proves it
+  // against a file that is really locked. What this one still has to hold
+  // is that the installer OWNS the bridge: while a second script built it,
+  // its result stood outside the installer's summary, and that is how a
+  // failure sat between two success messages for nine days (1.15.2).
+  Config := TFile.ReadAllText(
+    TPath.Combine(RepoRoot, 'DelphiRefactoringLight.xml'));
+  Assert.IsTrue(Config.Contains('RefactoringLightMcp.dproj'),
+    'the installer config must build the bridge itself');
+  Assert.IsTrue(Config.Contains('stage="after-build"'),
+    'and install the exe AFTER that build, or it installs the previous one');
+
+  Install := TFile.ReadAllText(TPath.Combine(RepoRoot, 'install.cmd'));
+  Assert.IsFalse(Install.ToLower.Contains('buildmcp'),
+    'nothing may build the bridge beside the installer again');
 end;
 
 procedure TRepoHygieneTests.InstallScripts_HaveNoLabelFallThrough;

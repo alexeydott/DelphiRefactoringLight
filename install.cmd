@@ -29,6 +29,8 @@ echo.
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo Installation completed with errors. See DelphiRefactoringLight.log for details.
+    echo The summary above says WHICH entry failed - the package, the MCP
+    echo bridge for Claude Code, or both.
     goto :error
 )
 
@@ -36,11 +38,12 @@ echo.
 echo Installation completed successfully.
 echo See DelphiRefactoringLight.log for details.
 
-:: MCP bridge for Claude Code (optional - a failure here does not fail the
-:: package installation)
+:: The bridge is an entry of the installer now (it builds it, installs it
+:: next to the package and verifies that the installed exe answers), so its
+:: result is a row of the summary above. What follows is only what the
+:: installer cannot do: registering it in Claude Code, which is the user's
+:: own configuration.
 set MCPEXE=%LOCALAPPDATA%\DelphiRefactoringLight\mcp\RefactoringLightMcp.exe
-call "%~dp0Mcp\buildmcp.cmd" %BDSVER%
-if %ERRORLEVEL% NEQ 0 goto :mcp_failed
 
 echo.
 echo ============================================
@@ -86,32 +89,12 @@ echo  reconnect it with /mcp or start a new session.
 echo  Check which IDEs the bridge sees:
 echo.
 echo       "%MCPEXE%" --list
-:: WITHOUT this goto the block FALLS THROUGH into :mcp_failed below.
-:: That is what happened from 1.15.2 until 1.16.30: every user whose
-:: bridge was already registered got the "MCP BRIDGE IS NOT installed"
-:: warning on every SUCCESSFUL install.
-goto :restart_hint
-
-:mcp_failed
-:: The package IS installed, so this must not read like a plain success - a
-:: stale bridge exe is invisible from inside Claude Code (it only reports its
-:: version to the MCP client, never to the IDE), and that cost two sessions of
-:: chasing wrong timeouts on 2026-09-30.
-echo.
-echo ################################################################
-echo  WARNING: the package is installed, the MCP BRIDGE IS NOT.
-echo ################################################################
-echo.
-echo  Claude Code will keep talking to the OLD bridge exe, so its tools
-echo  behave like the build that exe came from - wrong timeouts, missing
-echo  tools - and nothing inside the IDE can tell you. The reason is in
-echo  the lines above.
-echo.
-echo  A running Claude Code session is NOT the reason (since 1.22.1 the
-echo  old exe is moved aside under a unique name), so read the lines above.
-echo  To see what is installed at any time:
-echo.
-echo       "%MCPEXE%" --version
+:: This block used to fall through into a warning block below, which is
+:: why every user with a registered bridge got "MCP BRIDGE IS NOT
+:: installed" on a SUCCESSFUL install from 1.15.2 until 1.16.30. There is
+:: nothing below it any more - the bridge's own result is a row of the
+:: installer's summary - but the goto stays: a label block that ends
+:: without one does whatever is appended next.
 goto :restart_hint
 
 :restart_hint

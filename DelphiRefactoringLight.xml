@@ -25,4 +25,31 @@
 			<package description="Delphi Refactoring Light (Design-Time)">{#BplTargetDir}\DelphiRefactoringLight{#LibSuffix}.bpl</package>
 		</packages>
 	</entry>
+
+	<!-- The MCP bridge for Claude Code. It used to be built by a batch file
+	     AFTER the installer had already printed its summary, which is how a
+	     failure could sit between two success messages (1.15.2) - so it is
+	     an entry of its own now and its result stands in the same table.
+	     Win32 ONLY: one exe serves both IDEs, it talks to them over a named
+	     pipe and is started by Claude Code, not by the IDE.
+	     stage="after-build" is what makes the copy happen AFTER the compiler
+	     ran; without it the installer would install the previous build. The
+	     copy itself tolerates a RUNNING bridge: Windows refuses to overwrite
+	     such a file but allows renaming it, so the old one is moved aside
+	     under a unique name (1.22.1 - a fixed ".old" is held by the process
+	     that was started from it).
+	     The post event is the verification: the exe that is now installed
+	     has to answer --version. A copy that reported success while the old
+	     file stayed is exactly what cost nine days once. -->
+	<entry id="RefactoringLightMcp" description="MCP bridge for Claude Code (RefactoringLightMcp.exe)">
+		<build platforms="Win32">
+			<project>Mcp\RefactoringLightMcp.dproj</project>
+		</build>
+		<files platforms="Win32" stage="after-build">
+			<file target="{#LocalAppData}\DelphiRefactoringLight\mcp\RefactoringLightMcp.exe">Mcp\Bin\RefactoringLightMcp.exe</file>
+		</files>
+		<post platforms="Win32">
+			<exec description="Checking the installed bridge answers">"{#LocalAppData}\DelphiRefactoringLight\mcp\RefactoringLightMcp.exe" --version</exec>
+		</post>
+	</entry>
 </dih>
