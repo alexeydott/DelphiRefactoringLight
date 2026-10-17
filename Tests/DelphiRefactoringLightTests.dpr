@@ -57,6 +57,7 @@ uses
   Expert.SignatureEdit in '..\Source\Expert.SignatureEdit.pas',
   Expert.MethodEdit in '..\Source\Expert.MethodEdit.pas',
   Expert.DebugConsistency in '..\Source\Expert.DebugConsistency.pas',
+  Expert.UnusedUnits in '..\Source\Expert.UnusedUnits.pas',
   // The installer's own rule for where a build may write (forum
   // report 2026-10-15: Delphi installed by another account).
   DIH.Types in '..\dih\DIH.Types.pas',
@@ -81,6 +82,7 @@ uses
   Test.ExtractMethod in 'Test.ExtractMethod.pas',
   Expert.ExtractInterface in '..\Source\Expert.ExtractInterface.pas',
   Expert.EventGen in '..\Source\Expert.EventGen.pas',
+  Test.UnusedUnits in 'Test.UnusedUnits.pas',
   Test.ExtractInterface in 'Test.ExtractInterface.pas',
   Test.EventGenPlan in 'Test.EventGenPlan.pas';
 
