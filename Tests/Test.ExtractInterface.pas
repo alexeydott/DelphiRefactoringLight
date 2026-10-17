@@ -54,6 +54,17 @@ type
     ///  property name was parsed as EMPTY, which generated
     ///  "function Get: String" and "property : String read Get".</summary>
     [Test] procedure WrappedParametersAndEscapedNames_Issue44;
+
+    /// <summary>Issue #46, the reported class verbatim. An ARRAY property
+    ///  carries its own ':' inside the index brackets, and the type was
+    ///  read from the FIRST colon - so "property Test[ AIndex: Integer]:
+    ///  Integer read GetTest" got the type "Integer]:" and lost its index
+    ///  list. Found with it: the accessor scan stepped one character short
+    ///  of the keyword, so the word after "read" was always "D" and EVERY
+    ///  property looked like a FIELD accessor - which is why a property
+    ///  reading a real method was rewritten instead of being emitted as it
+    ///  stands.</summary>
+    [Test] procedure ArrayPropertyKeepsItsIndexList_Issue46;
   end;
 
 implementation
@@ -182,6 +193,82 @@ begin
   Assert.AreEqual('', TExtractInterfaceEngine.IInterfaceDirective('TComponent', '_Release'), False,
     '_Release is static in TComponent');
   Assert.AreEqual('', TExtractInterfaceEngine.IInterfaceDirective('TObject', 'QueryInterface'), False);
+end;
+
+procedure TExtractInterfaceTests.ArrayPropertyKeepsItsIndexList_Issue46;
+var
+  Info: TExtractInterfaceInfo;
+  I: Integer;
+begin
+  // The reporter's class, verbatim.
+  Assert.IsTrue(TExtractInterfaceEngine.ParseClassAtLine([
+    'unit U;',                                            // 1
+    'interface',                                          // 2
+    'type',                                               // 3
+    '  TMyClass = class',                                 // 4
+    '  private',                                          // 5
+    '    function GetTest(AIndex: Integer): Integer;',    // 6
+    '  public',                                           // 7
+    '    property Test[ AIndex: Integer]: Integer read GetTest;', // 8
+    '  end;',                                             // 9
+    'implementation',                                     // 10
+    'end.'], '', 4, Info));
+
+  Assert.AreEqual(2, Integer(Length(Info.Members)), 'GetTest and Test');
+
+  for I := 0 to High(Info.Members) do
+    if SameText(Info.Members[I].Name, 'Test') then
+    begin
+      // The type stops at the ':' OUTSIDE the index brackets.
+      Assert.AreEqual('Integer', Info.Members[I].TypeName, False,
+        'the index list holds its own colon');
+      // read GetTest names a METHOD of this class, so there is nothing to
+      // synthesise - the property goes in as it stands.
+      Assert.IsFalse(Info.Members[I].NeedsSynthAccessors,
+        'read GetTest is a method accessor, not a field');
+      // What the reporter ticked: the property alone.
+      Info.Members[I].Selected := True;
+    end;
+
+  Info.InterfaceName := 'IMyClass';
+  Info.Guid := '{19428B68-DD38-461D-B9C5-198479984325}';
+
+  // The reporter's expected preview, verbatim. The accessor METHOD comes
+  // along because an interface property may only name accessors the
+  // interface itself declares.
+  Assert.AreEqual(
+    '  IMyClass = interface' + sLineBreak +
+    '    [''{19428B68-DD38-461D-B9C5-198479984325}'']' + sLineBreak +
+    '    function GetTest(AIndex: Integer): Integer;' + sLineBreak +
+    '    property Test[ AIndex: Integer]: Integer read GetTest;' + sLineBreak +
+    '  end;',
+    TExtractInterfaceEngine.BuildInterfaceText(Info), False,
+    'the array property keeps its index list and brings its getter');
+
+  // An INHERITED accessor is in no member list of this class, so the
+  // "is it a field?" test cannot see it - and for an array property the
+  // synthesised pair would drop the index parameters. The index list is
+  // what decides: a property that has one is never rewritten.
+  Assert.IsTrue(TExtractInterfaceEngine.ParseClassAtLine([
+    'unit V;',                                                   // 1
+    'interface',                                                // 2
+    'type',                                                     // 3
+    '  TChild = class(TBase)',                                   // 4
+    '  public',                                                  // 5
+    '    property Items[AIndex: Integer]: string read GetItems;',// 6
+    '  end;',                                                   // 7
+    'implementation',                                           // 8
+    'end.'], '', 4, Info));
+  Assert.AreEqual(1, Integer(Length(Info.Members)), 'the property alone');
+  Assert.IsFalse(Info.Members[0].NeedsSynthAccessors,
+    'an array property is never rewritten, whoever declares its accessor');
+  Assert.AreEqual('string', Info.Members[0].TypeName, False, 'type at depth 0');
+  Info.Members[0].Selected := True;
+  Info.InterfaceName := 'IChild';
+  Info.Guid := '{00000000-0000-0000-0000-000000000000}';
+  Assert.IsTrue(TExtractInterfaceEngine.BuildInterfaceText(Info).Contains(
+    'property Items[AIndex: Integer]: string read GetItems;'),
+    'the index list survives: ' + TExtractInterfaceEngine.BuildInterfaceText(Info));
 end;
 
 procedure TExtractInterfaceTests.WrappedParametersAndEscapedNames_Issue44;

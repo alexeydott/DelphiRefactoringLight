@@ -302,6 +302,26 @@ type
 ///  bodies in the wizard (issue #44).</summary>
 function AccessorName(const APrefix, AExposedName: string): string;
 
+/// <summary>The declared type of a property signature: what stands after
+///  the ':' at bracket depth ZERO. An ARRAY property carries its own
+///  colon inside the index specification ("property Test[ AIndex:
+///  Integer]: Integer read GetTest"), and reading the FIRST colon gave
+///  the type "Integer]:" (issue #46). '' when there is no such colon.</summary>
+function PropertyTypeName(const ASignature: string): string;
+
+/// <summary>The index specification of a property INCLUDING its brackets
+///  ("[ AIndex: Integer]"), or '' for a plain property. Its presence is
+///  what makes a property an array property, and such a property can only
+///  ever be served by accessor METHODS - never by a field.</summary>
+function PropertyIndexSpec(const ASignature: string): string;
+
+/// <summary>The identifiers a property signature names after 'read' and
+///  after 'write' ('' when the clause is absent). The words are read with
+///  the keyword SKIPPED - stepping one character short of it answered 'D'
+///  for every property, which made each of them look like a field
+///  accessor (issue #46).</summary>
+procedure PropertyAccessors(const ASignature: string; out ARead, AWrite: string);
+
 implementation
 
 uses
@@ -310,6 +330,87 @@ uses
 function AccessorName(const APrefix, AExposedName: string): string;
 begin
   Result := APrefix + UnescapedIdentifier(AExposedName);
+end;
+
+function PropertyTypeName(const ASignature: string): string;
+var
+  I, Depth: Integer;
+begin
+  Result := '';
+  Depth := 0;
+  for I := 1 to Length(ASignature) do
+  begin
+    case ASignature[I] of
+      '[', '(': Inc(Depth);
+      ']', ')': if Depth > 0 then Dec(Depth);
+      ':':
+        if Depth = 0 then
+        begin
+          var T := Trim(Copy(ASignature, I + 1, MaxInt));
+          var K := 1;
+          while (K <= Length(T)) and not T[K].IsWhiteSpace and (T[K] <> ';') do
+            Inc(K);
+          Exit(Copy(T, 1, K - 1));
+        end;
+    end;
+  end;
+end;
+
+function PropertyIndexSpec(const ASignature: string): string;
+var
+  I, Depth, Start: Integer;
+begin
+  Result := '';
+  Depth := 0;
+  Start := 0;
+  for I := 1 to Length(ASignature) do
+  begin
+    if ASignature[I] = '[' then
+    begin
+      if Depth = 0 then Start := I;
+      Inc(Depth);
+    end
+    else if ASignature[I] = ']' then
+    begin
+      if Depth > 0 then Dec(Depth);
+      if (Depth = 0) and (Start > 0) then
+        Exit(Copy(ASignature, Start, I - Start + 1));
+    end
+    // A ':' at depth 0 ends the name part: anything in brackets after it
+    // belongs to the TYPE ("property P: array[0..1] of Byte read ..."),
+    // not to an index specification.
+    else if (ASignature[I] = ':') and (Depth = 0) then
+      Exit('');
+  end;
+end;
+
+procedure PropertyAccessors(const ASignature: string; out ARead, AWrite: string);
+
+  function WordAfter(const AKeyword: string): string;
+  var
+    Padded: string;
+    P, Idx, Start: Integer;
+  begin
+    Result := '';
+    Padded := ' ' + ASignature + ' ';
+    P := Pos(' ' + AKeyword + ' ', UpperCase(Padded));
+    if P = 0 then Exit;
+    // P points at the SPACE before the keyword, so the keyword itself ends
+    // at P + Length(AKeyword) - stepping only Length(AKeyword) lands on its
+    // last character and answered 'D' for 'READ' (issue #46).
+    Idx := P + Length(AKeyword) + 1;
+    while (Idx <= Length(Padded)) and (Padded[Idx] = ' ') do Inc(Idx);
+    Start := Idx;
+    while (Idx <= Length(Padded)) and
+          (IsIdentChar(Padded[Idx]) or (Padded[Idx] = '.') or
+           (Padded[Idx] = '&')) do
+      Inc(Idx);
+    Result := Copy(Padded, Start, Idx - Start);
+  end;
+
+begin
+  ARead := WordAfter('READ');
+  AWrite := WordAfter('WRITE');
 end;
 
 { ---------- helpers ---------- }
@@ -696,47 +797,17 @@ begin
         end;
         var SigEnd := I + 1;
         Inc(I);
-        // Detect default-array / index suffixes? For v1 we just keep them.
         var TrimAcc := Trim(Acc);
         // name after "property "
         var Pn := ExtractIdentAfter(TrimAcc, Length('property') + 1, J);
-        // type after first ':'
-        var ColonP := Pos(':', TrimAcc);
-        var TName := '';
-        if ColonP > 0 then
-        begin
-          var T := Trim(Copy(TrimAcc, ColonP + 1, MaxInt));
-          // up to next space or ';' or 'read' keyword
-          var K := 1;
-          while (K <= Length(T)) and not T[K].IsWhiteSpace and (T[K] <> ';') do Inc(K);
-          TName := Copy(T, 1, K - 1);
-        end;
-        var UpAcc := UpperCase(TrimAcc);
-        var HasWrite := (Pos(' WRITE ', ' ' + UpAcc + ' ') > 0);
-        var HasRead  := (Pos(' READ ', ' ' + UpAcc + ' ') > 0);
-
-        // Detect "naked" accessors that name a field (no method call):
-        // word after READ / WRITE that does NOT start with Get/Set we
-        // treat as field-style (conservative - rather emit a redundant
-        // accessor than miss one).
-        var AccReadIsField := False;
-        var AccWriteIsField := False;
-        for var KW in ['READ', 'WRITE'] do
-        begin
-          var KU: string := ' ' + UpAcc + ' ';
-          var KP: Integer := Pos(' ' + KW + ' ', KU);
-          if KP = 0 then Continue;
-          // Step past the keyword in UpAcc itself (KP is 1-based into KU).
-          var Idx: Integer := KP + Length(KW);
-          while (Idx <= Length(KU)) and (KU[Idx] = ' ') do Inc(Idx);
-          var Start: Integer := Idx;
-          while (Idx <= Length(KU)) and (IsIdentChar(KU[Idx]) or (KU[Idx] = '.')) do Inc(Idx);
-          var W: string := Copy(KU, Start, Idx - Start);
-          var Field: Boolean := (W <> '') and
-            not StartsText('GET', W) and not StartsText('SET', W);
-          if KW = 'READ' then AccReadIsField := Field
-          else AccWriteIsField := Field;
-        end;
+        // The type stands after the ':' at bracket depth 0 - an array
+        // property carries its own colon inside the index specification
+        // (issue #46).
+        var TName := PropertyTypeName(TrimAcc);
+        var AccRead, AccWrite: string;
+        PropertyAccessors(TrimAcc, AccRead, AccWrite);
+        var HasRead := AccRead <> '';
+        var HasWrite := AccWrite <> '';
 
         var M: TClassMember;
         M := Default(TClassMember);
@@ -752,8 +823,13 @@ begin
         M.LineEnd := SigEnd;
         M.ExposedName := Pn;
         M.IsReadOnly := HasRead and not HasWrite;
-        M.NeedsSynthAccessors :=
-          (HasRead and AccReadIsField) or (HasWrite and AccWriteIsField);
+        M.GetterName := AccRead;
+        M.SetterName := AccWrite;
+        // Whether these accessors are METHODS of this class or plain
+        // FIELDS can only be decided once every member is known - an
+        // accessor may be declared below the property. See the pass after
+        // the loop.
+        M.NeedsSynthAccessors := False;
         Members.Add(M);
         ResetModifiers;
         Continue;
@@ -805,6 +881,45 @@ begin
       Inc(I);
     end;
 
+    // An accessor is a METHOD of this class or it is not - and that
+    // decides everything downstream: a method accessor means the property
+    // goes into the interface AS IT STANDS (with its index list) and the
+    // accessor's own signature comes along, while a field accessor means
+    // the engine has to invent the pair. The old test was "the word does
+    // not start with Get/Set", which is a guess, and it ran on a word that
+    // was always 'D' (issue #46). The class's own member list is exact,
+    // and it is complete only here - an accessor may stand BELOW its
+    // property.
+    for var PI := 0 to Members.Count - 1 do
+    begin
+      if Members[PI].Kind <> mkProperty then Continue;
+      var PM := Members[PI];
+      // An ARRAY property can never be served by a field, so it is always
+      // emitted verbatim - inventing accessors there would drop the index
+      // list, which is exactly the reported damage.
+      if PropertyIndexSpec(PM.Signature) <> '' then
+        PM.NeedsSynthAccessors := False
+      else
+      begin
+        var NeedSynth := False;
+        for var AccName in [PM.GetterName, PM.SetterName] do
+        begin
+          if AccName = '' then Continue;
+          var IsOwnMethod := False;
+          for var MI := 0 to Members.Count - 1 do
+            if (Members[MI].Kind = mkMethod) and
+               SameText(Members[MI].Name, AccName) then
+            begin
+              IsOwnMethod := True;
+              Break;
+            end;
+          if not IsOwnMethod then NeedSynth := True;
+        end;
+        PM.NeedsSynthAccessors := NeedSynth;
+      end;
+      Members[PI] := PM;
+    end;
+
     AInfo.Members := Members.ToArray;
   finally
     Members.Free;
@@ -820,11 +935,13 @@ class function TExtractInterfaceEngine.BuildInterfaceText(
   const AInfo: TExtractInterfaceInfo): string;
 var
   SB: TStringBuilder;
+  Emitted: TStringList;
   M: TClassMember;
   Pn, Getter, Setter, TN, Indent: string;
 begin
   Indent := '    ';
   SB := TStringBuilder.Create;
+  Emitted := TStringList.Create;
   try
     SB.Append('  ').Append(AInfo.InterfaceName).Append(' = interface').AppendLine;
     SB.Append(Indent).Append('[''').Append(AInfo.Guid).Append(''']').AppendLine;
@@ -839,7 +956,10 @@ begin
       if M.IsClassMember then Continue;
       case M.Kind of
         mkMethod:
+        begin
           SB.Append(Indent).Append(M.Signature).Append(';').AppendLine;
+          Emitted.Add(M.Signature);
+        end;
 
         mkField:
         begin
@@ -860,7 +980,26 @@ begin
         mkProperty:
         begin
           if not M.NeedsSynthAccessors then
-            SB.Append(Indent).Append(M.Signature).Append(';').AppendLine
+          begin
+            // An interface property may only name accessors the INTERFACE
+            // itself declares, so the methods it reads and writes come
+            // along - with their own signatures, which is what carries an
+            // array property's index parameters (issue #46). A method the
+            // user ticked as well is not emitted twice.
+            for var AccName in [M.GetterName, M.SetterName] do
+            begin
+              if AccName = '' then Continue;
+              for var A in AInfo.Members do
+                if (A.Kind = mkMethod) and not A.IsClassMember and
+                   SameText(A.Name, AccName) and
+                   (Emitted.IndexOf(A.Signature) < 0) then
+                begin
+                  SB.Append(Indent).Append(A.Signature).Append(';').AppendLine;
+                  Emitted.Add(A.Signature);
+                end;
+            end;
+            SB.Append(Indent).Append(M.Signature).Append(';').AppendLine;
+          end
           else
           begin
             Pn := M.ExposedName;
@@ -889,6 +1028,7 @@ begin
     SB.Append('  end;');
     Result := SB.ToString;
   finally
+    Emitted.Free;
     SB.Free;
   end;
 end;
@@ -1036,6 +1176,13 @@ begin
         begin
           L.Add(AccessorName('Get', M.ExposedName));
           if not M.IsReadOnly then L.Add(AccessorName('Set', M.ExposedName));
+        end
+        else
+        begin
+          // The accessor METHODS travel with the property, so their names
+          // are part of what this member puts into the interface.
+          if M.GetterName <> '' then L.Add(M.GetterName);
+          if M.SetterName <> '' then L.Add(M.SetterName);
         end;
       end;
     end;
