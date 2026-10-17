@@ -208,8 +208,8 @@ end;
 
 const
   // every batch script of the repository that uses labels
-  ScriptFiles: array[0..3] of string = ('install.cmd', 'uninstall.cmd',
-    'rebuild.cmd', 'dih\builddih.cmd');
+  ScriptFiles: array[0..4] of string = ('install.cmd', 'uninstall.cmd',
+    'rebuild.cmd', 'release.cmd', 'dih\builddih.cmd');
 
 // A label line is ':name' - ':: text' is a comment, which is why the second
 // character decides.

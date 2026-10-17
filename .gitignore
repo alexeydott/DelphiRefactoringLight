@@ -99,3 +99,6 @@ Mcp/DCU/
 Tests/Win32/
 Tests/Win64/
 /Packages/DelphiRefactoringLight.res
+
+# Build output of release.cmd (the .bpl files attached to a release)
+/Release/

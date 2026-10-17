@@ -1,0 +1,258 @@
+# Changelog
+
+Every released version of Delphi Refactoring Light, newest first. Each entry
+links to the full notes of that release. Versions before 1.7.0 were
+development builds and were never released.
+
+---
+
+## 2.0.1 — 2026-10-17
+
+Everything since 1.23.2 (versions 1.23.3 … 2.0.1, 37 commits). The major
+number changes because of one behaviour change, at the end of this entry.
+
+### Downloads
+
+The compiled package is attached to this release, so a team can roll it out
+without building anything (issue #48):
+
+| file | for |
+| --- | --- |
+| `DelphiRefactoringLight370-Win32.bpl` | the 32-bit IDE (`bin\bds.exe`) |
+| `DelphiRefactoringLight370-Win64.bpl` | the 64-bit IDE (`bin64\bds.exe`) |
+| `RefactoringLightMcp.exe` | the MCP bridge for Claude Code (optional) |
+
+Both packages are built Release for RAD Studio 13 (37.0). Load one through
+*Component > Install Packages*, or replace the file your team already loads.
+Installing from the sources with `install.cmd` stays the normal way: it also
+registers the package, builds and registers the bridge, and works on machines
+without a command-line compiler. The detailed `.map` files are not attached by
+default — ask for them when an address from a crash log has to be resolved,
+because that needs the map of exactly this build.
+
+### New
+
+**Declare as constant** — editor menu, `Ctrl+Alt+Shift+C`, MCP tool
+`declare_constant`. Select a number or a string and declare it as a `const` or
+a `resourcestring`: local, in the class, or at unit level, optionally replacing
+every other occurrence in the routine or the unit. The dialog checks live — the
+preview line either shows the declaration that would be written or says in red
+why it cannot be, so there is no second code path that could disagree with the
+apply. It also opens with nothing selected, to define a constant from scratch.
+A value that names an identifier is refused: that name need not be in scope
+where the declaration goes.
+
+**Project check "Line endings"** — and a warning the moment the IDE *opens* a
+file with LF-only or mixed line endings, with "correct now", "this session" or
+"always". Delphi copes badly with mixed endings, and the open is the right
+moment: nothing has been typed yet, so the file can simply be rewritten and
+re-read. Form files, binaries and anything inside the RAD Studio installation
+are never touched. Measured on a real project: 25 findings in 2000 files, one
+of them genuinely mixed (1035 CRLF + 55 LF).
+
+**Project check "File encoding"** — the default pair is the one that fixes a
+real defect: a source that is valid UTF-8 but carries **no BOM** is read by the
+compiler as ANSI, so every non-ASCII character silently becomes two (measured
+with dcc32 37.0). Pure ASCII is never a finding — its bytes are the same in
+every encoding — and form files are left alone, because the IDE writes a
+non-ASCII character as `#nnnn` anyway (measured: 1368 of 1381 form files of a
+real project are pure ASCII).
+
+**Project check "Unused project units"** (issue #47) — units the project file
+lists although nothing in the project names them any more. A unit counts as
+used when any other unit uses it (units on the search path included) or when
+the project body names one of its identifiers, which is how a form reached only
+through `Application.CreateForm` is used. Two kinds: *unused*, and *unused, has
+initialization* — the latter a hint, because such a unit is often in the project
+exactly to register itself. Read-only: it never edits the project file. Measured
+on a real project: 86 findings in 1822 units.
+
+Four new MCP tools, 56 → **60**: `declare_constant`, `line_endings`,
+`file_encoding`, `unused_units`.
+
+### Extract interface
+
+Four reports, all of them from real classes:
+
+- a **wrapped parameter list** was cut at the `;` inside it, and the
+  continuation line came back as a "field"; an **`&`-escaped name**
+  (`property &String`) parsed as empty (#44);
+- an **array property** lost its index list, and whether its accessor is a field
+  or a method was decided by the name starting with `Get`/`Set` instead of by
+  the class's own member list (#46);
+- the interface unit no longer copies the source unit's **whole uses clause** —
+  it takes only what the generated interface really needs, which is the point of
+  extracting an interface in the first place;
+- an **existing target unit** is extended now (the interface is added at the end
+  of its type block, its uses clause topped up) instead of asking whether to
+  overwrite the file.
+
+And the command now says whether the class **can implement an interface at
+all** — a `TObject` descendant provides no `IInterface`, so the extracted
+interface would not compile — and offers to fix it right there: derive from
+`TInterfacedObject`, or add the `IInterface` implementation to the class itself.
+Neither is preselected: both change how the instance is freed.
+
+### The MCP bridge replaces itself
+
+Windows cannot overwrite a running program, so an install while Claude Code was
+running used to leave that session on the old bridge for good. A bridge of
+1.33.0 or newer notices **between two requests** that an install has moved it
+aside, starts the installed exe on its own stdin/stdout and waits for it: the
+session keeps talking to the same process it started, while the new code
+answers. Aside copies of earlier installs are removed at the next start.
+
+### Installing
+
+A run of reports from machines with no command-line compiler, or where Delphi
+was installed by a different account:
+
+- the install set an environment variable named `CONFIG`, and **MSBuild reads
+  every environment variable as a property**, so `$(Config)` became the path of
+  the config file and the build died trying to create a directory from it;
+- a `bds.exe` build that printed a **fatal error reported success**, because
+  bds.exe exits 0 either way. The error file has the last word now, decided by
+  the compiler code rather than the localized severity word;
+- the **MCP bridge is built by the installer itself**, as one row in the same
+  summary — including through the IDE on machines where msbuild is not
+  available, where the bridge was simply never built before;
+- the package registration is **suspended during a bds build**, so the IDE
+  started for the build neither reports a missing BPL nor locks the file the
+  linker is about to write;
+- msbuild is pinned to toolset 4.0 (a machine whose default was 2.0 failed with
+  MSB4036);
+- when the common directory belongs to another account, the build output goes to
+  `%LOCALAPPDATA%` instead of failing with MSB3191;
+- the install window could not be closed: a dialog watcher outlived the install
+  and kept the console alive. It ends by itself now, and only ever watches the
+  IDE it started.
+
+### Behaviour change (this is what makes it 2.0)
+
+A write to an editor buffer **from a worker thread now raises** a named
+exception instead of only being counted. ToolsAPI and the editor buffers are
+main-thread only; breaking that rule does not fail, it corrupts a buffer now and
+then — the worst way for a defect to behave. The flip had a condition written
+down when the counter was introduced: one live round over the write paths in
+which the counter stays at zero. That round ran before the flip.
+
+### Fixes
+
+- **Nested routines declared before a method's `begin` hid the method itself**
+  from the enclosing-routine walk — which feeds declare-as-constant, extract
+  variable, the rename scope "in current method" and the source resolution of
+  find references and rename. A sweep over 344 files: 21,201 lines newly
+  attributed to their routine, not one range changed.
+- No check ever rewrites a file of the **RAD Studio installation** (an Indy
+  source open in the editor was offered for conversion).
+- The editor menu's refactorings are **two alphabetical blocks** now — "introduce
+  something new" and "change what is there"; Remove with and Expand include
+  files moved to the project-wide group they share a scope dialog with.
+- **"Go to"** selects the identifier instead of marking from the start of the
+  line (interface GUID check, DFM event check), and in Unused project units it
+  points at the entry in the `.dpr` for a unit that has no file at all.
+- A message about a write **says where the write went** — the editor buffer
+  (undoable) or the disk. For a project-wide check most files are not open.
+- Result windows: **Close really closes**, and the shared progress window paints
+  its text before the scan starts instead of standing there empty.
+- An MCP handler stuck in an LSP wait no longer makes the package unload leak
+  and pin itself (**PR #45**).
+- The option chooser measures its text instead of assuming a height — a long
+  prompt was drawn behind the first radio button.
+
+### Upgrading
+
+Run `install.cmd` and restart RAD Studio, or load the attached `.bpl`. A running
+Claude Code session picks up the new bridge by itself from 1.33.0 on; an older
+one needs a new session.
+
+Thanks to **nLeonardt95** for issues #44, #46, #47 and #48, and to
+**Ian Branch** for PR #45.
+
+---
+
+## 1.23.2 — 2026-10-05
+
+[Full notes](https://github.com/jaenicke/DelphiRefactoringLight/releases/tag/1.23.2)
+— covers 1.11.3 … 1.23.2: 64 versions in 98 commits, and the DUnitX suite grew
+from 176 to 351 tests on Win32 and Win64.
+
+- **New feature "Edit methods"**: edit what a class declares — move members to
+  another class (also in another unit), change the signature, set modifiers, for
+  several members at once. The occurrences are verified with DelphiLSP *before*
+  the edit, and afterwards a window lists what still needs hand work.
+- **Every refactoring is reachable through the MCP bridge**, and every writing
+  tool shows the change before it writes it.
+- **An external code audit by Ian Branch** — 12 pull requests plus 7 area issues
+  with 123 findings — implemented in full, including several findings where code
+  could be lost or silently changed.
+- **Find references and rename** work on a cold DelphiLSP session and on large
+  projects without dropping occurrences.
+- **The plugin reports its own failures**: the status window explains the LSP
+  state in plain language and in colour, the main-thread rule is counted, and a
+  tool answer that cannot be right is flagged as a defect.
+- The interface GUID check fixes what it finds; a result row follows its line
+  through your own edits; uses cleanup asks the form designer what it cannot see
+  in the source.
+
+---
+
+## 1.11.2 — 2026-09-22
+
+[Full notes](https://github.com/jaenicke/DelphiRefactoringLight/releases/tag/1.11.2)
+— a small release with one important fix: **if you use the 64-bit IDE, please
+update.**
+
+- The 64-bit IDE could **freeze for about a minute and use 14 GB of memory**
+  (#16, thanks @ijbranch). The identifier index cache was written with 8-byte
+  numbers by the 64-bit build while the reader expects 4, so four bytes of a unit
+  name were read as a count — and on Win64 that multi-gigabyte allocation
+  *succeeds*, so the safety net never ran. Both IDEs now write identical cache
+  files, every length is checked before memory is reserved, and loading is much
+  faster (60 ms instead of 4 s for the complete RTL/VCL).
+- **MCP bridge**: less context in every Claude Code session, the bridge carries
+  the plugin's version, and the README explains `--scope user` vs `--scope local`.
+
+---
+
+## 1.11.0 — 2026-09-21
+
+[Full notes](https://github.com/jaenicke/DelphiRefactoringLight/releases/tag/1.11.0)
+— mostly about **find references and rename being right the first time**.
+
+- **An aborted request no longer deletes a result** (#13, thanks @nLeonardt95):
+  while a big project loads, DelphiLSP cancels requests after 10 s, and those
+  cancellations were treated as "not a reference".
+- Occurrences DelphiLSP does not answer for are **resolved from the sources**
+  (qualifier → declared type → member), which also covers the private/public
+  overload pair DelphiLSP stays silent about since Delphi 13.1 (RSS-5463).
+- **Overloads are told apart** by argument count and, where the text shows them,
+  argument types.
+- A second, lightweight DelphiLSP session in "agent" mode does the verification
+  (14.3 s → 6.5 s for 21 candidates, identical answers).
+- **Closing the result window stops the search.**
+- **No stack overflow on deep uses graphs** (#15, thanks @ijbranch).
+- The 64-bit IDE's **MCP named pipe** works (Windows error 998, a misaligned
+  buffer), and a broken registry value can no longer stop the plugin from loading.
+
+---
+
+## 1.7.0 — 2026-09-19 — first official release
+
+[Full notes](https://github.com/jaenicke/DelphiRefactoringLight/releases/tag/1.7.0)
+— a refactoring and navigation plugin for the Delphi IDE (RAD Studio 13, 32-bit
+and 64-bit), built on DelphiLSP: wherever it matters, every occurrence is
+verified by the language server instead of being matched as text.
+
+- **Refactorings**: rename (project, unit, method or selected units, form files
+  included), change signature across the whole method family, safe delete,
+  extract method, extract variable, wrap in try..finally, convert properties,
+  remove with, move to (new) unit, extract/extend interface, add IInterface
+  support, align method signature, semantic replace, expand include files.
+- **Navigation**: find references with the kind of each occurrence, find
+  implementations, find unit references, find original symbol, find the unit for
+  an identifier.
+- **Code assistance**: live quick fixes (missing unit, "did you mean", broken
+  uses entry, missing variable, interface methods, empty implementations, unused
+  variables and private members, missing semicolon), code completion with
+  generated event handlers and anonymous methods, and uses cleanup.
