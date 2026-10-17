@@ -3513,9 +3513,21 @@ end;
 procedure TSelfProtectionTests.AWriteFromAWorkerThreadIsRecordedAndCanBeRefused;
 var
   Before: Integer;
-  Raised, RanOffMain: Boolean;
+  Raised, RanOffMain, WasStrict: Boolean;
   T: TThread;
 begin
+  // 2.0 turned the counter into an exception, so the DEFAULT is part of
+  // the contract now - a revert has to be a deliberate edit, never a
+  // drift. The evidence for the flip is in the declaration's own doc.
+  WasStrict := StrictMainThread;
+  Assert.IsTrue(WasStrict, 'StrictMainThread is ON by default since 2.0');
+  try
+
+  // Both halves set the mode they are about; whatever the default is,
+  // this test puts it back (it used to end on a hard False, which from
+  // 2.0 on would have switched the guard off for the rest of the run).
+  StrictMainThread := False;
+
   // the test itself runs on the main thread, so nothing is recorded there
   Before := MainThreadViolations;
   Assert.IsTrue(OnMainThread, 'the suite runs on the main thread');
@@ -3540,13 +3552,12 @@ begin
   Assert.AreEqual('probe_from_worker', LastOffMainThreadCall,
     'and the call that did it is named');
 
-  // With the strict switch it is fatal instead of merely counted. It is OFF
-  // by default on purpose: the three known offenders would turn into hard
-  // errors before they are fixed.
+  // With the strict switch it is fatal instead of merely counted - which
+  // is what the plugin ships with since 2.0.
   Raised := False;
   RanOffMain := False;
   StrictMainThread := True;
-  try
+  begin
     T := TThread.CreateAnonymousThread(
       procedure
       begin
@@ -3564,11 +3575,13 @@ begin
     finally
       T.Free;
     end;
-  finally
-    StrictMainThread := False;
   end;
   Assert.IsTrue(Raised, 'strict mode raises EOffMainThread');
   Assert.IsFalse(RanOffMain, 'and the write never happens');
+
+  finally
+    StrictMainThread := WasStrict;
+  end;
 end;
 
 procedure TSelfProtectionTests.AnImpossibleUnitNameIsReportedAsADefect;
