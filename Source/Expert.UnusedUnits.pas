@@ -129,6 +129,14 @@ function CollectUnusedProjectUnits(const AUnits: TArray<TUnitFacts>;
   out ANotes: TArray<string>;
   const ADetails: TUnusedUnitDetails = nil): TArray<TUnusedUnitIssue>;
 
+/// <summary>How many of AUNITS the project actually LISTS. The rest are
+///  reference sources - units on the search path whose uses clauses count
+///  but which the project does not contain - and counting those as project
+///  units answered "4270 project unit(s)" for a project of 1822 (measured
+///  live, 1.31.3). One place, because the window and the tool both say
+///  it.</summary>
+function ProjectUnitCount(const AUnits: TArray<TUnitFacts>): Integer;
+
 implementation
 
 uses
@@ -161,6 +169,13 @@ begin
   else
     Result := '';
   end;
+end;
+
+function ProjectUnitCount(const AUnits: TArray<TUnitFacts>): Integer;
+begin
+  Result := 0;
+  for var U in AUnits do
+    if U.InProject then Inc(Result);
 end;
 
 function CollectUnusedProjectUnits(const AUnits: TArray<TUnitFacts>;

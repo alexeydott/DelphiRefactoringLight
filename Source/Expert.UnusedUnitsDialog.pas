@@ -491,7 +491,7 @@ var
   Notes: TArray<string>;
   Err, Summary: string;
   Prog: TCheckProgressWindow;
-  Safe, Hint, Unknown: Integer;
+  Safe, Hint, Unknown, InProject: Integer;
   Form: TUnusedUnitsForm;
   I: TUnusedUnitIssue;
 begin
@@ -526,10 +526,15 @@ begin
       uukUnreadable: Inc(Unknown);
     end;
 
+  // Length(Facts) is project units PLUS the reference sources of the
+  // closure - as a denominator that reads like a project twice the size
+  // (measured live: 4270 for a project of 1822 units).
+  InProject := ProjectUnitCount(Facts);
   Summary := Format('%d of %d project unit(s) are named by no uses clause: ' +
     '%d without an initialization section, %d with one (check those), ' +
-    '%d not checked.',
-    [Length(Issues), Length(Facts), Safe, Hint, Unknown]);
+    '%d not checked. %d further unit(s) were read as reference sources.',
+    [Length(Issues), InProject, Safe, Hint, Unknown,
+     Length(Facts) - InProject]);
 
   if Length(Issues) = 0 then
   begin

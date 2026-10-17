@@ -3014,7 +3014,8 @@ begin
     begin
       Files := GatherEncodingCheckFiles;
       if Length(Files) > 0 then
-        Issues := CollectEncodingIssues(Files, From, Target, ReadEncodingBytes);
+        Issues := CollectEncodingIssues(Files, From, Target,
+          ReadEncodingBytes, nil, FindBdsRoot);
     end, False, AStop, Err) then Exit(McpErr(Err));
   if Length(Files) = 0 then Exit(McpErr('no project loaded / no source files'));
 
@@ -3140,7 +3141,13 @@ begin
       end;
     end;
 
-    Res.AddPair('projectUnits', TJSONNumber.Create(Length(Facts)));
+    var InProject := ProjectUnitCount(Facts);
+    Res.AddPair('projectUnits', TJSONNumber.Create(InProject));
+    // The rest of Facts are REFERENCE SOURCES - units on the search path
+    // whose uses clauses count, but which the project does not list. They
+    // are worth naming; they are not the denominator.
+    Res.AddPair('referenceSources',
+      TJSONNumber.Create(Length(Facts) - InProject));
     Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
     Res.AddPair('unused', TJSONNumber.Create(Safe));
     Res.AddPair('withInitCode', TJSONNumber.Create(Hint));
@@ -3212,7 +3219,8 @@ begin
     begin
       Files := GatherLineEndingCheckFiles;
       if Length(Files) > 0 then
-        Issues := CollectLineEndingIssues(Files, ReadLineEndingBytes);
+        Issues := CollectLineEndingIssues(Files, ReadLineEndingBytes,
+          nil, FindBdsRoot);
     end, False, AStop, Err) then Exit(McpErr(Err));
   if Length(Files) = 0 then Exit(McpErr('no project loaded / no source files'));
 

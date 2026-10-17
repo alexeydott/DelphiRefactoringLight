@@ -124,6 +124,15 @@ function LineEndingProblemText(const AInfo: TLineEndingInfo): string;
 ///  and not .dproj/.groupproj, which the IDE rewrites itself.</summary>
 function LineEndingCheckCandidate(const AFileName: string): Boolean;
 
+/// <summary>THE THIRD GATE of the two project checks, and the one a live
+///  run found missing (1.31.3): a file under the RAD Studio installation
+///  is not ours to rewrite. The scope collects every unit OPEN in the
+///  editor, and Ctrl+click into an Indy or RTL source puts it there - the
+///  encoding check then offered to convert a shipped Indy unit. The
+///  line-ending WARNING has had this rule since 1.24.0; this is the same
+///  rule, in one place. AInstallRoot = '' switches it off.</summary>
+function UnderInstallRoot(const AFileName, AInstallRoot: string): Boolean;
+
 /// <summary>Content that must never be rewritten byte-wise: a binary form
 ///  file ($FF 'TPF0'), or a NUL byte in a file that is not UTF-16. The
 ///  extension gate above is the first guard; this is the second, because a
@@ -188,7 +197,8 @@ function LineEndingIssueId(const AFileName: string): string;
 ///  may be nil.</summary>
 function CollectLineEndingIssues(const AFiles: TArray<string>;
   const AReader: TLineEndingReader;
-  const AProgress: TLineEndingProgress = nil): TArray<TLineEndingIssue>;
+  const AProgress: TLineEndingProgress = nil;
+  const AInstallRoot: string = ''): TArray<TLineEndingIssue>;
 
 type
   /// <summary>One file an encoding conversion would touch.</summary>
@@ -220,7 +230,8 @@ function EncodingIssueId(const AFileName: string): string;
 function CollectEncodingIssues(const AFiles: TArray<string>;
   AFrom: TSourceEncodings; ATo: TSourceEncoding;
   const AReader: TEncodingReader;
-  const AProgress: TLineEndingProgress = nil): TArray<TEncodingIssue>;
+  const AProgress: TLineEndingProgress = nil;
+  const AInstallRoot: string = ''): TArray<TEncodingIssue>;
 
 /// <summary>The rows an answer must carry, by id: every finding that was
 ///  ACTED on, whatever AMax says, plus as many of the rest as fit. Shared
@@ -505,6 +516,13 @@ begin
             (Ext = '.dpk') or (Ext = '.inc');
 end;
 
+function UnderInstallRoot(const AFileName, AInstallRoot: string): Boolean;
+begin
+  Result := (AInstallRoot <> '') and
+    LowerCase(TPath.GetFullPath(AFileName)).StartsWith(
+      LowerCase(IncludeTrailingPathDelimiter(TPath.GetFullPath(AInstallRoot))));
+end;
+
 function LooksBinaryContent(const ABytes: TBytes): Boolean;
 var
   N, I, Limit: Integer;
@@ -587,7 +605,8 @@ end;
 
 function CollectLineEndingIssues(const AFiles: TArray<string>;
   const AReader: TLineEndingReader;
-  const AProgress: TLineEndingProgress): TArray<TLineEndingIssue>;
+  const AProgress: TLineEndingProgress;
+  const AInstallRoot: string): TArray<TLineEndingIssue>;
 var
   Seen: TDictionary<string, Boolean>;
   Bytes: TBytes;
@@ -609,6 +628,7 @@ begin
       // The same two gates the warning at file open uses: the fix rewrites
       // BYTES, so a form file or anything binary is none of our business.
       if not LineEndingCheckCandidate(AFiles[I]) then Continue;
+      if UnderInstallRoot(AFiles[I], AInstallRoot) then Continue;
       if not AReader(AFiles[I], Bytes) then Continue;
       if LooksBinaryContent(Bytes) then Continue;
       Issue := Default(TLineEndingIssue);
@@ -716,7 +736,8 @@ end;
 function CollectEncodingIssues(const AFiles: TArray<string>;
   AFrom: TSourceEncodings; ATo: TSourceEncoding;
   const AReader: TEncodingReader;
-  const AProgress: TLineEndingProgress): TArray<TEncodingIssue>;
+  const AProgress: TLineEndingProgress;
+  const AInstallRoot: string): TArray<TEncodingIssue>;
 var
   Seen: TDictionary<string, Boolean>;
   Bytes: TBytes;
@@ -739,6 +760,7 @@ begin
       // The same two gates the line-ending check uses: this rewrites
       // BYTES, so a form file or anything binary is none of our business.
       if not LineEndingCheckCandidate(AFiles[I]) then Continue;
+      if UnderInstallRoot(AFiles[I], AInstallRoot) then Continue;
       if not AReader(AFiles[I], Bytes) then Continue;
       if LooksBinaryContent(Bytes) then Continue;
       Found := ClassifySourceEncoding(Bytes);

@@ -427,12 +427,14 @@ begin
   try
     Screen.Cursor := crHourGlass;
     try
+      // Not a file of the RAD Studio installation - see the encoding
+      // check, where a live run found one in the list (1.31.3).
       Issues := CollectLineEndingIssues(Files, ReadLineEndingBytes,
         procedure(ACurrent, ATotal: Integer; const AFile: string)
         begin
           if (ACurrent mod 25 = 0) or (ACurrent = ATotal) then
             Prog.Step(ACurrent, ATotal, ExtractFileName(AFile));
-        end);
+        end, FindBdsRoot);
     finally
       Screen.Cursor := crDefault;
     end;

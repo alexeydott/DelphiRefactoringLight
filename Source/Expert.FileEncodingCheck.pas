@@ -50,7 +50,7 @@ uses
   Vcl.Graphics, Vcl.Clipbrd, System.StrUtils,
   Expert.DebugConsistency, Expert.DialogHelper, Expert.EditorHelperIntf,
   Expert.IdeThemes, Expert.LineEndingWatcher, Expert.ListViewSort,
-  Expert.ScopeFiles;
+  Expert.ScopeFiles, Expert.UnitIndex;   // FindBdsRoot
 
 // ---------------------------------------------------------------------------
 //  the conversion - the one writer
@@ -452,11 +452,14 @@ begin
 
   Prog := CreateCheckProgress('File encoding...', nil);
   try
+    // FindBdsRoot: the scope takes every unit OPEN in the editor, and a
+    // Ctrl+click into an Indy or RTL source puts one there - measured on
+    // a live project, which offered to convert the shipped IdHTTP.pas.
     Issues := CollectEncodingIssues(Files, From, Target, ReadEncodingBytes,
       procedure(ACurrent, ATotal: Integer; const AFile: string)
       begin
         Prog.Step(ACurrent, ATotal, ExtractFileName(AFile));
-      end);
+      end, FindBdsRoot);
   finally
     Prog.Free;
   end;

@@ -724,6 +724,12 @@ type
     [Test] procedure OnlyWhatWasAskedForAndMayBeRewritten;
     [Test] procedure BothChecksShareOneRowRule;
     [Test] procedure TheEncodingToolDeclaresWhatItTakes;
+    /// <summary>Found by running the check against a real project
+    ///  (1.31.3): it offered to convert the shipped Indy IdHTTP.pas,
+    ///  because the scope takes every unit OPEN in the editor and the
+    ///  BDS-root guard only ever covered the uses closure. A check that
+    ///  rewrites BYTES must never reach into the installation.</summary>
+    [Test] procedure NoCheckRewritesTheInstallation;
   end;
 
   /// <summary>Forum report 2026-10-15: Delphi had been installed by an admin
@@ -6205,6 +6211,66 @@ begin
   var Unknown := UnknownReportIds(Ids, ['A', 'ZZZZ', '']);
   Assert.AreEqual(1, Integer(Length(Unknown)));
   Assert.AreEqual('ZZZZ', Unknown[0], 'an id nothing carries is named');
+end;
+
+procedure TFileEncodingCheckTests.NoCheckRewritesTheInstallation;
+var
+  Root, Own, Shipped: string;
+  Reader: TEncodingReader;
+begin
+  // The two files of the reported shape: one of the project, one under
+  // the RAD Studio root the user had open in the editor.
+  Root := TPath.Combine(FDir, 'Studio');
+  TDirectory.CreateDirectory(TPath.Combine(Root, 'source'));
+  // A non-ASCII character, or the bytes are pure ASCII and the file is
+  // not an ANSI finding at all - the first run of this test said so.
+  Own := WriteRawEnc('Own.pas',
+    TEncoding.ANSI.GetBytes('unit Own; // Gr' + #$00F6 + 'sse'#13#10));
+  Shipped := TPath.Combine(Root, 'source\IdHTTP.pas');
+  TFile.WriteAllBytes(Shipped,
+    TEncoding.ANSI.GetBytes('unit IdHTTP; // Gr' + #$00F6 + 'sse'#13#10));
+
+  Reader :=
+    function(const AFile: string; out ABytes: TBytes): Boolean
+    begin
+      Result := TFile.Exists(AFile);
+      if Result then ABytes := TFile.ReadAllBytes(AFile);
+    end;
+
+  // Without a root both are findings - that is the state that shipped.
+  var All := CollectEncodingIssues([Own, Shipped], [secAnsi], secUtf8Bom,
+    Reader);
+  Assert.AreEqual(2, Integer(Length(All)),
+    'both are ANSI, so both qualify as far as the encoding goes');
+
+  // With it, the installation's file is gone and the project's stays.
+  var Mine := CollectEncodingIssues([Own, Shipped], [secAnsi], secUtf8Bom,
+    Reader, nil, Root);
+  Assert.AreEqual(1, Integer(Length(Mine)),
+    'the file under the RAD Studio root is NOT a finding');
+  Assert.AreEqual(LowerCase(Own), LowerCase(Mine[0].FileName),
+    'and the project''s own file still is');
+
+  // The same gate, same rule, for the line-ending check.
+  var Ends := CollectLineEndingIssues(
+    [WriteRawEnc('Lf.pas', TEncoding.UTF8.GetBytes('unit Lf;'#10)),
+     TPath.Combine(Root, 'source\Lf2.pas')], Reader, nil, Root);
+  TFile.WriteAllBytes(TPath.Combine(Root, 'source\Lf2.pas'),
+    TEncoding.UTF8.GetBytes('unit Lf2;'#10));
+  Ends := CollectLineEndingIssues(
+    [TPath.Combine(FDir, 'Lf.pas'), TPath.Combine(Root, 'source\Lf2.pas')],
+    Reader, nil, Root);
+  Assert.AreEqual(1, Integer(Length(Ends)),
+    'the line-ending check applies the same rule');
+  Assert.IsFalse(Ends[0].FileName.Contains('Studio'),
+    'and it is the project''s file that is left');
+
+  // A path that only LOOKS like the root is none of it - "C:\Studio2"
+  // must not be swallowed by "C:\Studio".
+  Assert.IsFalse(UnderInstallRoot(Root + '2\X.pas', Root),
+    'the root is a FOLDER, not a prefix of the name');
+  Assert.IsFalse(UnderInstallRoot(Own, ''),
+    'no root given = the gate is off');
 end;
 
 procedure TFileEncodingCheckTests.TheEncodingToolDeclaresWhatItTakes;

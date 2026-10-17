@@ -38,6 +38,11 @@ type
     ///  project), so over 1822 units the difference is half a minute
     ///  against two seconds - the laziness IS the feature.</summary>
     [Test] procedure TheExpensiveHalfOnlySeesCandidates;
+    /// <summary>Measured live (1.31.3): the answer said "4270 project
+    ///  unit(s)" for a project of 1822, because the facts hold the
+    ///  reference sources as well - and a denominator the caller cannot
+    ///  check is the class of defect the self-checks exist for.</summary>
+    [Test] procedure OnlyTheProjectsOwnUnitsAreProjectUnits;
   end;
 
 implementation
@@ -217,6 +222,41 @@ begin
   for N in Notes do Joined := Joined + N + '|';
   Assert.IsTrue(Joined.Contains('main source was not read'),
     'no main source is a limit worth naming: ' + Joined);
+end;
+
+procedure TUnusedUnitsTests.OnlyTheProjectsOwnUnitsAreProjectUnits;
+var
+  Units: TArray<TUnitFacts>;
+
+  procedure Add(const AName: string; AInProject: Boolean);
+  var
+    F: TUnitFacts;
+  begin
+    F := Default(TUnitFacts);
+    F.UnitName := AName;
+    F.FileName := AName + '.pas';
+    F.InProject := AInProject;
+    F.Readable := True;
+    Units := Units + [F];
+  end;
+
+begin
+  Assert.AreEqual(0, ProjectUnitCount(nil), 'nothing is nothing');
+
+  Add('Main', True);
+  Add('Own1', True);
+  Add('Own2', True);
+  // what ProjectScopeFiles adds on top: units on the search path, read
+  // only so their uses clauses count.
+  Add('Vendor.Grid', False);
+  Add('Vendor.Edit', False);
+  Add('Vendor.Base', False);
+  Add('Vendor.Util', False);
+
+  Assert.AreEqual(3, ProjectUnitCount(Units),
+    'the project lists three - the four reference sources are not its units');
+  Assert.AreEqual(4, Integer(Length(Units)) - ProjectUnitCount(Units),
+    'and the rest is what the answer reports as reference sources');
 end;
 
 procedure TUnusedUnitsTests.TheExpensiveHalfOnlySeesCandidates;
