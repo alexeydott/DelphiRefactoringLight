@@ -68,6 +68,14 @@ type
     ///  with Show the click is a no-op - and so is Escape, which clicks
     ///  that same button. Third time: 1.16.20 L3g was the first.</summary>
     [Test] procedure NoModelessWindowClosesThroughModalResult;
+    /// <summary>Reported by a reviewing model (2026-10-19): an empty
+    ///  lsp_hover answer carried the key "note" TWICE - AddFreshNote adds
+    ///  it and the line after it added it again. That is valid JSON of
+    ///  which a parser keeps one pair, its choice, so one of the two
+    ///  sentences is lost at random. A sweep over every note of the lsp_*
+    ///  unit found that it was the only one, and the fix is structural:
+    ///  there the note goes through SetJsonNote, which REPLACES.</summary>
+    [Test] procedure TheLspToolsSetTheirNoteInsteadOfAppendingIt;
 
     /// <summary>MSBuild - and the IDE's own project builder, which is what
     ///  a bds.exe build uses - reads EVERY environment variable as a
@@ -634,6 +642,41 @@ begin
     Assert.AreEqual('', Offenders.Text.Trim, Offenders.Text);
   finally
     SL.Free;
+    Offenders.Free;
+  end;
+end;
+
+procedure TRepoHygieneTests.TheLspToolsSetTheirNoteInsteadOfAppendingIt;
+var
+  Offenders: TStringList;
+  Sets: Integer;
+begin
+  var Root := RepoRoot;
+  Assert.IsTrue(Root <> '', 'the repository root must be found');
+  var F := TPath.Combine(Root, 'Source\Expert.McpLspTools.pas');
+  Assert.IsTrue(TFile.Exists(F), 'the unit must be there: ' + F);
+
+  Offenders := TStringList.Create;
+  try
+    Sets := 0;
+    var Lines := TFile.ReadAllLines(F);
+    for var I := 0 to High(Lines) do
+    begin
+      // CODE only - the comment above the fix names AddPair to say why it
+      // is not used, and a sweep that counts prose finds the fix instead
+      // of the defect (the lesson of the GetCurrentContext sweep).
+      var L := StripLineComment(Lines[I]);
+      if Pos('SetJsonNote(', L) > 0 then Inc(Sets);
+      if Pos('AddPair(''note''', L) > 0 then
+        Offenders.Add(Format('Expert.McpLspTools.pas(%d): %s - a second ' +
+          'AddPair(''note'') is a DUPLICATE KEY; use SetJsonNote, which ' +
+          'replaces', [I + 1, Trim(L)]));
+    end;
+    // Vacuous otherwise: a renamed helper would make this pass silently.
+    Assert.IsTrue(Sets >= 2,
+      Format('the notes must go through SetJsonNote, found %d call(s)', [Sets]));
+    Assert.AreEqual('', Offenders.Text.Trim, Offenders.Text);
+  finally
     Offenders.Free;
   end;
 end;

@@ -64,7 +64,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.JSON,
   System.Generics.Collections, System.SyncObjs, System.Math,
   Expert.McpServer, Expert.EditorHelperIntf, Expert.LspManager,
-  Lsp.Protocol, Lsp.Uri, Delphi.FileEncoding;
+  Expert.McpTools, Lsp.Protocol, Lsp.Uri, Delphi.FileEncoding;
 
 var
   GSyncLock: TCriticalSection = nil;
@@ -167,11 +167,19 @@ end;
 
 // Added to an EMPTY answer of the lsp_* tools when the file was sent a
 // moment ago - DelphiLSP is silent in a unit while it analyses it.
-procedure AddFreshNote(ARes: TJSONObject; AClient: TLspClient; const AFile: string);
+// APrefix is the tool's own sentence: it goes into the SAME note, because
+// a second AddPair('note') would be a duplicate KEY (which is what
+// lsp_hover answered until 2.0.6).
+procedure AddFreshNote(ARes: TJSONObject; AClient: TLspClient;
+  const AFile: string; const APrefix: string = '');
+var
+  Pre: string;
 begin
+  Pre := '';
+  if APrefix <> '' then Pre := APrefix + ' ';
   var Ago := McpLspSentAgoMs(AClient, AFile);
   if (Ago >= 0) and (Ago < 60000) then
-    ARes.AddPair('note', Format('%s was (re)sent to DelphiLSP %d s ago because ' +
+    SetJsonNote(ARes, Pre + Format('%s was (re)sent to DelphiLSP %d s ago because ' +
       'its content changed - it may still be analysing it; retry shortly. If ' +
       'the unit stays silent, the usual cause is that a unit (or one it uses) is taken from a precompiled .dcu ' +
         'instead of its source - e.g. DCUs of the project''s own units on ' +
@@ -180,7 +188,7 @@ begin
         '%%TEMP%%\DelphiLSP\Agent*.log.',
       [ExtractFileName(AFile), Ago div 1000]))
   else
-    ARes.AddPair('note', 'DelphiLSP returned nothing. If the unit stays ' +
+    SetJsonNote(ARes, Pre + 'DelphiLSP returned nothing. If the unit stays ' +
       'silent, the usual cause is that a unit (or one it uses) is taken from a precompiled .dcu ' +
         'instead of its source - e.g. DCUs of the project''s own units on ' +
         'the IDE library path or in the DCU output directory. To see it: ' +
@@ -283,8 +291,9 @@ begin
   var H := Client.GetHover(F, L0, C0);
   var Res := TJSONObject.Create;
   Res.AddPair('hover', H);
-  if H = '' then AddFreshNote(Res, Client, F);
-  if H = '' then Res.AddPair('note', 'DelphiLSP returned nothing for this position');
+  if H = '' then
+    AddFreshNote(Res, Client, F,
+      'DelphiLSP returned nothing for this position.');
   Result := McpOk(Res);
 end;
 
@@ -312,9 +321,14 @@ begin
   if not RequirePos(AArgs, F, L0, C0, Err) then Exit(McpErr(Err));
   if not PrepareClient(F, AStop, Client, Err) then Exit(McpErr(Err));
   var Res := TJSONObject.Create;
-  Res.AddPair('locations', LocationsToJson(Client.GotoImplementation(F, L0, C0)));
-  Res.AddPair('note', 'DelphiLSP''s own answer - for interface methods ' +
-    'find_implementations (plugin scan) is usually more complete');
+  var Locs := Client.GotoImplementation(F, L0, C0);
+  Res.AddPair('locations', LocationsToJson(Locs));
+  const What = 'DelphiLSP''s own answer - for interface methods ' +
+    'find_implementations (plugin scan) is usually more complete.';
+  // An empty answer deserves the reason as well, like lsp_definition's -
+  // and it goes into the SAME note, never a second one.
+  if Length(Locs) = 0 then AddFreshNote(Res, Client, F, What)
+  else SetJsonNote(Res, What);
   Result := McpOk(Res);
 end;
 
@@ -348,7 +362,9 @@ begin
   if Arr = nil then Arr := TJSONArray.Create;
   var Res := TJSONObject.Create;
   Res.AddPair('symbols', Arr);
-  Res.AddPair('note', 'raw LSP DocumentSymbol[] - ranges are 0-based');
+  const What = 'raw LSP DocumentSymbol[] - ranges are 0-based.';
+  if Arr.Count = 0 then AddFreshNote(Res, Client, F, What)
+  else SetJsonNote(Res, What);
   Result := McpOk(Res);
 end;
 
@@ -388,7 +404,10 @@ begin
   var R := Client.GetSignatureHelp(F, L0, C0);
   var Res := TJSONObject.Create;
   if R <> nil then Res.AddPair('signatureHelp', R) else Res.AddPair('signatureHelp', TJSONNull.Create);
-  Res.AddPair('note', 'raw LSP SignatureHelp (activeParameter/activeSignature 0-based)');
+  const What = 'raw LSP SignatureHelp (activeParameter/activeSignature ' +
+    '0-based).';
+  if R = nil then AddFreshNote(Res, Client, F, What)
+  else SetJsonNote(Res, What);
   Result := McpOk(Res);
 end;
 
@@ -429,9 +448,11 @@ begin
     var Res := TJSONObject.Create;
     Res.AddPair('items', Arr);
     Res.AddPair('total', TJSONNumber.Create(Total));
-    Res.AddPair('note', 'kind = LSP CompletionItemKind (2 method, 3 function, 5 field, ' +
-      '6 variable, 7 class, 8 interface, 10 property, 13 enum, 14 keyword, 21 constant, ' +
-      '22 struct)');
+    const What = 'kind = LSP CompletionItemKind (2 method, 3 function, ' +
+      '5 field, 6 variable, 7 class, 8 interface, 10 property, 13 enum, ' +
+      '14 keyword, 21 constant, 22 struct).';
+    if Total = 0 then AddFreshNote(Res, Client, F, What)
+    else SetJsonNote(Res, What);
     Result := McpOk(Res);
   finally
     R.Free;

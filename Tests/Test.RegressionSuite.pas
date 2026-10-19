@@ -489,6 +489,11 @@ type
     ///  which is the lie 1.25.1 found in the line-ending tool. The sentence
     ///  is DERIVED from the outcomes now, in one shared place.</summary>
     [Test] procedure AnApplyNoteSaysWhatReallyHappened;
+    /// <summary>Reported by a reviewing model (2026-10-19): an empty
+    ///  lsp_hover answer carried "note" twice, because AddPair APPENDS.
+    ///  A duplicate key is valid JSON of which a parser keeps one pair -
+    ///  its choice - so one of the two sentences was lost at random.</summary>
+    [Test] procedure AnAnswerCarriesNoKeyTwice;
   end;
 
   /// <summary>A forum screenshot (2026-10-02) showed the Extract Method
@@ -3936,6 +3941,38 @@ begin
     'three named, three failed: ' + AllFailed);
   Assert.IsTrue(AllFailed.Contains('3 declaration(s)'),
     'and it says how many were named: ' + AllFailed);
+end;
+
+procedure TSelfProtectionTests.AnAnswerCarriesNoKeyTwice;
+var
+  O: TJSONObject;
+  Notes: Integer;
+begin
+  O := TJSONObject.Create;
+  try
+    // The shape of the report: two code paths both have something to say.
+    SetJsonNote(O, 'DelphiLSP returned nothing for this position.');
+    SetJsonNote(O, 'Unit1.pas was (re)sent 2 s ago - retry shortly.');
+
+    Notes := 0;
+    for var I := 0 to O.Count - 1 do
+      if O.Pairs[I].JsonString.Value = 'note' then Inc(Notes);
+    Assert.AreEqual(1, Notes,
+      'ONE "note" key, whatever how many places write it: ' + O.ToJSON);
+    Assert.AreEqual('Unit1.pas was (re)sent 2 s ago - retry shortly.',
+      O.GetValue<string>('note'), 'and it is the one that was set last');
+
+    // The first write still has to work on an object that has no note yet.
+    var P := TJSONObject.Create;
+    try
+      SetJsonNote(P, 'only one');
+      Assert.AreEqual('only one', P.GetValue<string>('note'), 'the first note');
+    finally
+      P.Free;
+    end;
+  finally
+    O.Free;
+  end;
 end;
 
 

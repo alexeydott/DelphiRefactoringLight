@@ -6,6 +6,29 @@ development builds and were never released.
 
 ---
 
+## 2.0.6 - 2026-10-19
+
+### An answer carries no key twice
+
+An empty `lsp_hover` answer had the key `"note"` TWICE: one place added the
+freshness diagnosis, the next line added its own sentence. That is valid
+JSON of which a parser keeps one pair - its choice - so one of the two
+sentences was lost at random. The two sentences are ONE note now, and in the
+`lsp_*` tools every note goes through a helper that REPLACES, so a second
+one cannot become a second key. A sweep over the whole unit was the evidence
+that `lsp_hover` was the only such place; the four tools whose note is
+purely informational were converted with it, and they now add the reason
+when their answer is empty - the hint `lsp_definition` and `lsp_hover`
+already gave.
+
+### Which unit need not be open
+
+`find_original_symbol` named "a unit that is not open" as a case the `lsp_*`
+tools cannot answer, while those tools say the unit need not be open - a
+contradiction in wording, not in substance: the tools send the unit you ASK
+ABOUT, and what can stay invisible to them is the unit a symbol is DECLARED
+in. Both sentences name their unit now.
+
 ## 2.0.5 - 2026-10-19
 
 ### An apply says what it really did

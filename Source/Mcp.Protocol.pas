@@ -1133,7 +1133,7 @@ const
     '{"name":"find_original_symbol","description":"Where the identifier at a position is ' +
     'DECLARED - DelphiLSP first, then the type of its qualifier, then the identifier index. ' +
     'Answers in cases lsp_definition does not: a private/public overload pair (Delphi 13.1 ' +
-    'RSS-5463) or a unit that is not open. Read-only.","inputSchema":{"type":"object",' +
+    'RSS-5463) or a symbol whose DECLARING unit the session has not analysed - only the unit you ask about is sent to DelphiLSP, so a declaration elsewhere can stay invisible to it while the identifier index knows it. Read-only.","inputSchema":{"type":"object",' +
     '"properties":{"file":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer","description":' +
     '"1-based."},"column":{"type":"integer","description":"1-based. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},' + InstanceProp +
     '},"required":["file","line","column"]}}' +
@@ -1493,14 +1493,14 @@ const
     '"required":["token"]}}' +
     ',' +
     '{"name":"lsp_hover","description":"DelphiLSP hover text at a position (type / declaration ' +
-    'info). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","description"' +
+    'info). The unit you ASK ABOUT need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","description"' +
     ':"Absolute path of the unit."},"line":{"type":"integer","description":"1-based line."},"co' +
     'lumn":{"type":"integer","description":"1-based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"ins' +
     'tance":{"type":"integer","description":"Process id of the IDE to use. Normally omitted - t' +
     'he IDE is chosen automatically (see ide_instances)."}},"required":["file","line","column"]' +
     '}}' +
     ',' +
-    '{"name":"lsp_definition","description":"DelphiLSP go-to-definition for a position. The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","input' +
+    '{"name":"lsp_definition","description":"DelphiLSP go-to-definition for a position. The unit you ASK ABOUT need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","input' +
     'Schema":{"type":"object","properties":{"file":{"type":"string","description":"Absolute pat' +
     'h of the unit."},"line":{"type":"integer","description":"1-based line."},"column":{"type":' +
     '"integer","description":"1-based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"instance":{"type"' +
@@ -1508,14 +1508,14 @@ const
     'en automatically (see ide_instances)."}},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"lsp_implementation","description":"DelphiLSP go-to-implementation for a position.' +
-    ' The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","description":"Abso' +
+    ' The unit you ASK ABOUT need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","description":"Abso' +
     'lute path of the unit."},"line":{"type":"integer","description":"1-based line."},"column":' +
     '{"type":"integer","description":"1-based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"instance"' +
     ':{"type":"integer","description":"Process id of the IDE to use. Normally omitted - the IDE' +
     ' is chosen automatically (see ide_instances)."}},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"lsp_references","description":"DelphiLSP textDocument/references for a position (' +
-    'when the server supports it). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type"' +
+    'when the server supports it). The unit you ASK ABOUT need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type"' +
     ':"string","description":"Absolute path of the unit."},"line":{"type":"integer","descriptio' +
     'n":"1-based line."},"column":{"type":"integer","description":"1-based column (anywhere on ' +
     'the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"include_declaration":{"type":"boolean","description":"Include the declaration itself (default true)."},"instance":{"type":"integer","' +
@@ -1523,13 +1523,13 @@ const
     'ally (see ide_instances)."}},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"lsp_document_symbols","description":"DelphiLSP document symbols of a unit (raw LS' +
-    'P JSON, 0-based ranges). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"str' +
+    'P JSON, 0-based ranges). The unit you ASK ABOUT need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"str' +
     'ing","description":"Absolute path of the unit."},"instance":{"type":"integer","description' +
     '":"Process id of the IDE to use. Normally omitted - the IDE is chosen automatically (see i' +
     'de_instances)."}},"required":["file"]}}' +
     ',' +
     '{"name":"lsp_signature_help","description":"DelphiLSP signature help inside a call (raw LS' +
-    'P JSON). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","descriptio' +
+    'P JSON). The unit you ASK ABOUT need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","descriptio' +
     'n":"Absolute path of the unit."},"line":{"type":"integer","description":"1-based line."},"' +
     'column":{"type":"integer","description":"1-based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"i' +
     'nstance":{"type":"integer","description":"Process id of the IDE to use. Normally omitted -' +
@@ -1537,7 +1537,7 @@ const
     '"]}}' +
     ',' +
     '{"name":"lsp_completion","description":"DelphiLSP completion items at a position (label, d' +
-    'etail, kind); prefix filters, max limits (default 100). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","p' +
+    'etail, kind); prefix filters, max limits (default 100). The unit you ASK ABOUT need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","p' +
     'roperties":{"file":{"type":"string","description":"Absolute path of the unit."},"line":{"t' +
     'ype":"integer","description":"1-based line."},"column":{"type":"integer","description":"1-' +
     'based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"prefix":{"type":"string","description":"Only items whose label starts with this (case-insensitive)."},"max":{"type":"int' +
@@ -1547,7 +1547,7 @@ const
     ',' +
     '{"name":"lsp_request","description":"Sends any request to the plugin''s DelphiLSP session a' +
     'nd returns the raw result (LSP conventions: 0-based positions, file URIs). \"file\" syncs ' +
-    'that document first. Lifecycle and document-sync methods are refused. The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"typ' +
+    'that document first. Lifecycle and document-sync methods are refused. The unit you ASK ABOUT need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"typ' +
     'e":"object","properties":{"method":{"type":"string","description":"The LSP method, e.g. textDocument/documentHighlight. Lifecycle, did* and $/ methods are refused."},"params":{"type":"object","description":"The params of the request as JSON - sent as they are."},"file":{"t' +
     'ype":"string","description":"Optional: sync this file''s current content before the request' +
     '."},"timeout_ms":{"type":"integer","description":"How long to wait for the answer (default 20000)."},"instance":{"type":"integer","description":"Process id' +
