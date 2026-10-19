@@ -858,10 +858,38 @@ const
     '"refresh":{"type":"boolean","description":"Force a fresh analysis by the ' +
     'plugin''s own DelphiLSP session (slower, a few seconds). Done ' +
     'automatically when no current diagnostics exist for the buffer."}';
+  // What is true for EVERY writing tool. It used to end "plus a token",
+  // which only HALF of them hand out - the three variants below say per
+  // tool what protects an apply, because "is the preview pinned?" is a
+  // question the caller cannot answer from the outside (reported by a
+  // reviewing model, 2026-10-19).
   ApplyProp =
     '"apply":{"type":"boolean","description":"Default false: nothing is ' +
+    'written and the answer lists the changes (file, line, before, after). ' +
+    'true makes the change."}';
+  // ...and it hands out a token that pins the files AND the arguments.
+  ApplyTokenProp =
+    '"apply":{"type":"boolean","description":"Default false: nothing is ' +
     'written and the answer lists the changes (file, line, before, after) ' +
-    'plus a token. true makes the change."}';
+    'plus a token. true makes the change - pass the token back with it and ' +
+    'the change is refused when a file, or an argument of this call, ' +
+    'differs from the preview."}';
+  // ...and it needs no token, because it looks again itself.
+  ApplyFreshProp =
+    '"apply":{"type":"boolean","description":"Default false: nothing is ' +
+    'written and the answer lists what would be written. true makes the ' +
+    'change. There is no token and none is needed: apply re-runs this ' +
+    'tool''s own analysis on the CURRENT buffers, so it can never carry ' +
+    'out a plan made for a state that is gone - it answers for what it ' +
+    'finds now, or refuses."}';
+  // ...and it acts on the ids of a previous scan.
+  ApplyIdsProp =
+    '"apply":{"type":"boolean","description":"Default false: nothing is ' +
+    'written and the findings are listed with an id each. true needs ' +
+    'fix_ids and acts on exactly those. There is no token: apply ' +
+    're-scans, and an id names the PLACE, so an id from an older scan ' +
+    'finds nothing rather than something else - it comes back in ' +
+    'unknownIds and nothing is done for it."}';
   TokenProp =
     '"token":{"type":"string","description":"The token of the preview this ' +
     'call applies. The change is refused when a file changed since then."}';
@@ -1039,7 +1067,7 @@ const
     '(with end_column), or where to start looking for \"expression\"."},"end_column":' +
     '{"type":"integer","description":"1-based, exclusive."},"name":{"type":"string",' +
     '"description":"Name of the new variable. Default: derived from the expression."},' +
-    ApplyProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
+    ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
     '{"name":"wrap_try_finally","description":"Wraps the lines from_line..to_line in a ' +
     'try..finally block. The cleanup is inferred from the statement right before them ' +
@@ -1050,7 +1078,7 @@ const
     '"from_line":{"type":"integer","description":"1-based first line."},"to_line":' +
     '{"type":"integer","description":"1-based last line. Default: from_line."},"cleanup":' +
     '{"type":"string","description":"The statement for the finally block, e.g. ' +
-    '\"List.Free;\"."},' + ApplyProp + ',' + TokenProp + ',' + InstanceProp + '},' +
+    '\"List.Free;\"."},' + ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp + '},' +
     '"required":["file","from_line"]}}' +
     ',' +
     '{"name":"move_to_unit","description":"Moves the declaration at a position (type, ' +
@@ -1061,7 +1089,7 @@ const
     '"line":{"type":"integer","description":"1-based line of the identifier."},' +
     '"column":{"type":"integer","description":"1-based column."},"target_file":' +
     '{"type":"string","description":"The unit to move into (path, or a name next to ' +
-    'the source)."},' + ApplyProp + ',' + TokenProp + ',' + InstanceProp + '},"required":' +
+    'the source)."},' + ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp + '},"required":' +
     '["file","line","column","target_file"]}}' +
     ',' +
     '{"name":"remove_with","description":"Rewrites \"with X do\" statements: every ' +
@@ -1074,7 +1102,7 @@ const
     'inside the with-statement; without it the whole file is scanned."},"files":{"type":' +
     '"array","items":{"type":"string"}},"project":{"type":"boolean"},"inline_vars":' +
     '{"type":"boolean","description":"Introduce inline variables for complex targets ' +
-    '(Delphi 10.3+). Default true."},' + ApplyProp + ',' + TokenProp + ',' + InstanceProp +
+    '(Delphi 10.3+). Default true."},' + ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp +
     '}}}' +
     ',' +
     '{"name":"cleanup_uses","description":"Runs what the uses-cleanup dialog runs: ' +
@@ -1092,7 +1120,7 @@ const
     '"include_unverified":{"type":"boolean","description":"Default false. Also act on ' +
     'entries of a form unit whose designer could not be asked - outside the IDE nothing ' +
     're-adds them, so a wrong removal can break the build or the form streaming."},' +
-    ApplyProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file"]}}' +
+    ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file"]}}' +
     ',' +
     '{"name":"find_unit_references","description":"Which units use the given unit, and ' +
     'where: every hit verified with DelphiLSP, plus one row with \"unused\": true per unit ' +
@@ -1119,7 +1147,7 @@ const
     '"object","properties":{"file":{"type":"string"},"from_line":{"type":"integer",' +
     '"description":"1-based first line of the block."},"to_line":{"type":"integer",' +
     '"description":"1-based last line. Default: from_line."},"name":{"type":"string",' +
-    '"description":"Name of the new method. Default ExtractedMethod."},' + ApplyProp + ',' +
+    '"description":"Name of the new method. Default ExtractedMethod."},' + ApplyFreshProp + ',' +
     InstanceProp + '},"required":["file","from_line"]}}' +
     ',' +
     '{"name":"extract_interface","description":"Extracts an interface from the class at ' +
@@ -1148,7 +1176,7 @@ const
     '_AddRef, _Release and the reference counting go into the class and its ' +
     'ancestor stays. The other half of what \"iinterface\" offers; use ' +
     'this where change_base_to would drop a base class that matters."},' +
-    ApplyProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
+    ApplyFreshProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
     '{"name":"add_iinterface","description":"Adds IInterface support to a class that ' +
     'does not descend from TInterfacedObject: IInterface in the ancestor list, an ' +
@@ -1157,7 +1185,7 @@ const
     'Afterwards the instance frees itself when the last interface reference drops. ' +
     'apply=false (the default) returns the code it would add.","inputSchema":{"type":' +
     '"object","properties":{"file":{"type":"string"},"line":{"type":"integer",' +
-    '"description":"1-based line inside or at the class declaration."},' + ApplyProp +
+    '"description":"1-based line inside or at the class declaration."},' + ApplyFreshProp +
     ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
     '{"name":"signature_check","description":"Every declaration and implementation of ' +
@@ -1166,7 +1194,7 @@ const
     '(class declarations first, then the implementations, which keep their parameter ' +
     'NAMES because the body uses them).","inputSchema":{"type":"object","properties":' +
     '{"file":{"type":"string"},"line":{"type":"integer","description":"1-based."},' +
-    '"column":{"type":"integer","description":"1-based."},' + ApplyProp + ',' +
+    '"column":{"type":"integer","description":"1-based."},' + ApplyFreshProp + ',' +
     InstanceProp + '},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"dfm_events","description":"Checks every form of the project: an event ' +
@@ -1178,7 +1206,7 @@ const
     'in the NAME of a type (an alias, e.g. TcxImageIndex = TImageIndex): the handler is ' +
     'correct and needs no fix.","inputSchema":{"type":"object",' +
     '"properties":{"fix_ids":{"type":"array","items":{"type":"string"},' +
-    '"description":"Ids from a previous call."},' + ApplyProp + ',' + InstanceProp +
+    '"description":"Ids from a previous call."},' + ApplyIdsProp + ',' + InstanceProp +
     '}}}' +
     ',' +
     '{"name":"interface_guids","description":"Every interface declaration of the ' +
@@ -1192,7 +1220,7 @@ const
     '{"only_problems":{"type":"boolean","description":"Default true."},' +
     '"fix_ids":{"type":"array","items":{"type":"string"},"description":"Ids from a ' +
     'previous call - the declarations that get a new GUID. Required for apply."},' +
-    ApplyProp + ',' + InstanceProp + '}}}' +
+    ApplyIdsProp + ',' + InstanceProp + '}}}' +
     ',' +
     '{"name":"declare_constant","description":"Declares a number or a string literal as a const or a resourcestring and puts the name in its place. Pass literal (or column + end_column) to replace something that is there, or neither plus value to define one from scratch - the line is then only the anchor that says which routine or class local and class mean. The value must be a literal or an expression of literals; a name in it is refused, because it need not be in scope where the declaration goes."' + ',"inputSchema":{"type":"object","properties":' +
     '{"file":{"type":"string","description":"The unit."},' +
@@ -1206,14 +1234,14 @@ const
     '"section":{"type":"string","description":"const (default) or resourcestring - the latter only at unit level and only for a string."},' +
     '"place":{"type":"string","description":"local (default), class, interface or implementation."},' +
     '"replace_all":{"type":"boolean","description":"Also replace the other occurrences of the literal - the routine for local, the unit otherwise. Ignored without a literal."},' +
-    ApplyProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
+    ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
     '{"name":"file_encoding","description":"Project sources whose ENCODING is not the one you want, and the conversion for them. The default pair is the one that fixes a real defect: a unit that is valid UTF-8 but carries NO BOM is read by the compiler as ANSI, so every non-ASCII character in it silently becomes two (measured). Pure ASCII is never a finding unless you ask for it - its bytes are the same in every encoding - and form files and anything binary are never touched. Every finding carries an id; apply=true with fix_ids rewrites exactly those files, keeping every character."' + ',"inputSchema":{"type":"object","properties":' +
     '{"from":{"type":"array","items":{"type":"string"},"description":"Which encodings to convert: ansi, utf8_no_bom, ascii, utf16. Default: ansi + utf8_no_bom."},' +
     '"to":{"type":"string","description":"utf8_bom (default), utf8_no_bom or ansi. A file whose text the target cannot hold is refused, never written with replacement characters."},' +
     '"fix_ids":{"type":"array","items":{"type":"string"},"description":"Ids from a previous call - the files to convert. Required for apply."},' +
     '"max":{"type":"integer","description":"Most rows to return (default 200)."},' +
-    ApplyProp + ',' + InstanceProp + '}}}' +
+    ApplyIdsProp + ',' + InstanceProp + '}}}' +
     ',' +
     '{"name":"unused_units","description":"Units the PROJECT FILE lists although nothing in the project names them any more - they still get compiled and still clutter the project tree. A unit counts as used when any other unit uses it (units on the search path included, not only project ones) or when the project body names one of its identifiers, which is how a form reached only through Application.CreateForm is used; the project''s own uses clause is its unit LIST and never counts. Two kinds: unused, and unused_with_init_code - the latter is a HINT, because such a unit is often in the project exactly to register itself. READ-ONLY: it never touches the project file. Only ONE layer is reported, since two unused units that use each other keep each other alive. Packages are refused - the units a package contains are what it exists for."' +
     ',"inputSchema":{"type":"object","properties":' +
@@ -1231,13 +1259,13 @@ const
     '{"fix_ids":{"type":"array","items":{"type":"string"},"description":"Ids ' +
     'from a previous call - the files to rewrite. Required for apply."},' +
     '"max":{"type":"integer","description":"Most rows to return (default 200)."},' +
-    ApplyProp + ',' + InstanceProp + '}}}' +
+    ApplyIdsProp + ',' + InstanceProp + '}}}' +
     ',' +
     '{"name":"add_unit","description":"Adds a unit to the uses clause of a file (interface or i' +
     'mplementation), minimal edit, IDE buffer when the file is open. Refuses units only on the ' +
     'browsing path. apply=false (the default) only shows the change.","inputSchema":{"type":"object","properties":{"file":{"type":"string","desc' +
     'ription":"Absolute path of the unit."},"unit":{"type":"string"},"section":{"type":"string"' +
-    ',"enum":["interface","implementation"]},' + ApplyProp + ',' + TokenProp + ',' +
+    ',"enum":["interface","implementation"]},' + ApplyTokenProp + ',' + TokenProp + ',' +
     '"instance":{"type":"integer","description":"Proces' +
     's id of the IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instan' +
     'ces)."}},"required":["file","unit"]}}' +
@@ -1245,7 +1273,7 @@ const
     '{"name":"remove_unit","description":"Removes a unit from the uses clause of a file. apply=' +
     'false (the default) only shows the change.","inpu' +
     'tSchema":{"type":"object","properties":{"file":{"type":"string","description":"Absolute pa' +
-    'th of the unit."},"unit":{"type":"string"},' + ApplyProp + ',' + TokenProp + ',' +
+    'th of the unit."},"unit":{"type":"string"},' + ApplyTokenProp + ',' + TokenProp + ',' +
     '"instance":{"type":"integer","description":"Pro' +
     'cess id of the IDE to use. Normally omitted - the IDE is chosen automatically (see ide_ins' +
     'tances)."}},"required":["file","unit"]}}' +
@@ -1302,7 +1330,7 @@ const
     'type":"string","description":"Absolute path of the unit."},"line":{"type":"integer","descr' +
     'iption":"1-based line of the identifier (a use or the declaration)."},"column":{"type":"in' +
     'teger","description":"1-based column."},"apply":{"type":"boolean","description":"Delete it' +
-    ' when deletable (default false)."},"instance":{"type":"integer","description":"Process id ' +
+    ' when deletable (default false). There is no token: apply compares the unit with the content this call analysed and refuses when it changed."},"instance":{"type":"integer","description":"Process id ' +
     'of the IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instances).' +
     '"}},"required":["file","line","column"]}}' +
     ',' +
@@ -1327,7 +1355,7 @@ const
     'me":{"type":"string"},"type":{"type":"string"},"modifier":{"type":"string"},"default":{"ty' +
     'pe":"string"},"from":{"type":"string"},"value":{"type":"string"}},"required":["name"]}},"a' +
     'pply":{"type":"boolean","description":"Apply the plan when it has no errors (default false' +
-    ')."},"instance":{"type":"integer","description":"Process id of the IDE to use. Normally om' +
+    '). There is no token: apply reads every touched file again and compares it with what was analysed - all of them or none."},"instance":{"type":"integer","description":"Process id of the IDE to use. Normally om' +
     'itted - the IDE is chosen automatically (see ide_instances)."}},"required":["file","line",' +
     '"column"]}}' +
     ',' +
@@ -1354,7 +1382,7 @@ const
     '"string"},"description":"Directives to add to every selected declaration (virtual, overloa' +
     'd, inline, static, reintroduce, override)."},"remove_modifiers":{"type":"array","items":{"' +
     'type":"string"},"description":"Directives to take out of every selected declaration."},"ap' +
-    'ply":{"type":"boolean","description":"Write the plan (default false)."},"instance":{"type"' +
+    'ply":{"type":"boolean","description":"Write the plan (default false). There is no token: apply compares the source with the analysed state and re-runs the plan on the text that is there now."},"instance":{"type"' +
     ':"integer","description":"Process id of the IDE to use. Normally omitted - the IDE is chos' +
     'en automatically (see ide_instances)."}},"required":["file","line"]}}' +
     ',' +
@@ -1364,10 +1392,19 @@ const
     'LSP (the declaration of the last identifier): with a rule''s declaredIn it must be declared' +
     ' in that unit, otherwise all matches of a rule must lead to the same declaration (the most' +
     ' frequent one). Matches of another symbol are never replaced; matches DelphiLSP cannot res' +
-    'olve (inactive IFDEF branch) only with include_unverified. Without apply it only reports."' +
+    'olve (inactive IFDEF branch) only with include_unverified. Without apply it only reports. THE RULES FILE, which nothing else ' +
+    'describes: {\"rules\":[{\"find\":\"Manager.Config.WriteConfig\",\"replace\":\"TAppCentral.Get<IConfig>.WriteConfig\",' +
+    '\"uses\":[\"AppCentral.Core\"],\"declaredIn\":\"AppCentral.Config\",\"localVar\":{\"name\":\"LConfig\",' +
+    '\"type\":\"IConfig\",\"value\":\"TAppCentral.Get<IConfig>\",\"replace\":\"LConfig.WriteConfig\"}}]}. ' +
+    'find and replace are dotted identifier paths, NOT regular expressions; the match is case-insensitive and never inside a comment ' +
+    'or a string, and a rule without find is dropped. uses must be an ARRAY of unit names - they are added to every file that really gets ' +
+    'an edit. declaredIn (optional) pins the unit the matched symbol must be DECLARED in. localVar (optional) fires only when a rule ' +
+    'matches more than once inside ONE routine body: then \"var <name>: <type> := <value>;\" is hoisted right after its begin ' +
+    'and localVar.replace is used in that routine instead of replace. The file is plain JSON, not a Delphi source, so write it with an ' +
+    'ordinary file tool."' +
     ',"inputSchema":{"type":"object","properties":{"files":{"type":"array","items":{"type":"str' +
     'ing"},"description":"Units to process (default: all project units)."},"apply":{"type":"boo' +
-    'lean","description":"Replace (default false = report)."},"include_unverified":{"type":"boo' +
+    'lean","description":"Replace (default false = report). There is no token and no earlier preview to carry over: every call re-runs the scan and the DelphiLSP verification, and apply only decides whether the result is written."},"include_unverified":{"type":"boo' +
     'lean","description":"Also replace matches DelphiLSP gave no answer for (default false)."},' +
     '"max":{"type":"integer","description":"Max match rows in the result (default 100)."},"inst' +
     'ance":{"type":"integer","description":"Process id of the IDE to use. Normally omitted - th' +
@@ -1384,7 +1421,7 @@ const
     'ype":"string","description":"Absolute path of the unit."},"line":{"type":"integer","descri' +
     'ption":"1-based line of the identifier."},"column":{"type":"integer","description":"1-base' +
     'd column."},"new_unit":{"type":"string","description":"Name of the new unit (e.g. \"Custom' +
-    'er.List\") or a full path."},' + ApplyProp + ',' + TokenProp + ',' +
+    'er.List\") or a full path."},' + ApplyTokenProp + ',' + TokenProp + ',' +
     '"instance":{"type":"integer","description":"Process id of the' +
     ' IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instances)."}},"r' +
     'equired":["file","line","column","new_unit"]}}' +
@@ -1397,7 +1434,7 @@ const
     'r/.dpk) or project=true. apply=false (the default) only reports what would be expanded.","' +
     'inputSchema":{"type":"object","properties":{"file":{"type":"st' +
     'ring"},"files":{"type":"array","items":{"type":"string"}},"directory":{"type":"string"},"p' +
-    'roject":{"type":"boolean"},' + ApplyProp + ',' +
+    'roject":{"type":"boolean"},' + ApplyFreshProp + ',' +
     '"instance":{"type":"integer","description":"Process id of the I' +
     'DE to use. Normally omitted - the IDE is chosen automatically (see ide_instances)."}}}}' +
     ',' +
@@ -1410,7 +1447,7 @@ const
     ' buffer (not saved).","inputSchema":{"type":"object","properties":{"file":{"type":"string' +
     '"},"from_line":{"type":"integer","description":"1-based."},"to_line":{"type":"integer"},"d' +
     'irection":{"type":"string","enum":["to_accessors","to_fields"]},"getter":{"type":"boolean"' +
-    '},"setter":{"type":"boolean"},"apply":{"type":"boolean"},"instance":{"type":"integer","des' +
+    '},"setter":{"type":"boolean"},"apply":{"type":"boolean","description":"Default false: nothing is written and the answer shows the plan. true makes the change. There is no token: apply re-runs the plan on the file as it is now, in the same call."},"instance":{"type":"integer","des' +
     'cription":"Process id of the IDE to use. Normally omitted - the IDE is chosen automaticall' +
     'y (see ide_instances)."}},"required":["file","from_line"]}}' +
     ',' +

@@ -3390,6 +3390,21 @@ begin
     Res.AddPair('duplicateGuids', TJSONNumber.Create(Dupes));
     Res.AddPair('withoutGuid', TJSONNumber.Create(Missing));
     Res.AddPair('entries', Arr);
+    // An id that matches nothing used to be dropped in silence while the
+    // note below said the places the caller named are done - the lie 1.25.1
+    // found in the line-ending tool, in the one answer nobody can check.
+    if DoApply then
+    begin
+      var AllIds: TArray<string> := nil;
+      for var E in Entries do AllIds := AllIds + [GuidEntryId(E)];
+      var Unknown := UnknownReportIds(AllIds, WantIds);
+      if Length(Unknown) > 0 then
+      begin
+        var UArr := TJSONArray.Create;
+        for var U in Unknown do UArr.Add(U);
+        Res.AddPair('unknownIds', UArr);
+      end;
+    end;
     if DoApply then
       Res.AddPair('note', 'The declarations you named carry a fresh GUID now, ' +
         'in the IDE buffer when the file was open (not saved) and on disk ' +
@@ -3515,6 +3530,21 @@ begin
     Res.AddPair('signatureMismatches', TJSONNumber.Create(Mismatch));
     Res.AddPair('aliasOnlyDifferences', TJSONNumber.Create(AliasOnly));
     Res.AddPair('issues', Arr);
+    // An id that matches nothing used to be dropped in silence while the
+    // note below said the places the caller named are done - the lie 1.25.1
+    // found in the line-ending tool, in the one answer nobody can check.
+    if DoApply then
+    begin
+      var AllIds: TArray<string> := nil;
+      for var Iss in Issues do AllIds := AllIds + [DfmIssueId(Iss)];
+      var Unknown := UnknownReportIds(AllIds, WantIds);
+      if Length(Unknown) > 0 then
+      begin
+        var UArr := TJSONArray.Create;
+        for var U in Unknown do UArr.Add(U);
+        Res.AddPair('unknownIds', UArr);
+      end;
+    end;
     if DoApply then
       Res.AddPair('note', 'Fixed handlers are in the IDE buffers (not saved). ' +
         'A missing handler is generated as an EMPTY method - in an inherited ' +

@@ -156,6 +156,13 @@ type
     ///  tools and five got an entry), so the classification is TOTAL now
     ///  and this test is what refuses an unclassified one.</summary>
     [Test] procedure EveryToolGetsADeliberateWait;
+    /// <summary>A reviewing model with nothing but the tool list said it
+    ///  could use almost everything - and then: the shared apply text
+    ///  promises "plus a token" while only half the writing tools hand one
+    ///  out, so for the other half it could not tell whether an apply is
+    ///  protected against changes at all. It cannot be told from the
+    ///  outside, so each tool has to say it.</summary>
+    [Test] procedure EveryWritingToolSaysWhatProtectsItsApply;
   end;
 
   /// <summary>Issue #13: while DelphiLSP loads a big project (12-30 s) its
@@ -1631,6 +1638,78 @@ begin
   Assert.IsTrue(During > Before, Format('a running pipe handler must be ' +
     'counted by the worker latch (workers before: %d, while it ran: %d)',
     [Before, During]));
+end;
+
+procedure TMcpPipeRegressionTests.EveryWritingToolSaysWhatProtectsItsApply;
+var
+  Token, Fresh, Ids, Guard: Integer;
+  Bad: string;
+
+  procedure Note(const AWhat: string);
+  begin
+    // ALL of them: fixing one at a time hides how many there are.
+    if Bad <> '' then Bad := Bad + '; ';
+    Bad := Bad + AWhat;
+  end;
+
+begin
+  Token := 0;
+  Fresh := 0;
+  Ids := 0;
+  Guard := 0;
+  Bad := '';
+  var Arr := McpToolDefinitions;
+  try
+    Assert.IsTrue((Arr <> nil) and (Arr.Count > 40),
+      'the shipped tool list is what this test walks');
+    for var V in Arr do
+    begin
+      var Tool := V as TJSONObject;
+      var Name := Tool.GetValue<string>('name', '');
+      var Schema := Tool.GetValue<TJSONObject>('inputSchema', nil);
+      if Schema = nil then Continue;
+      var Props := Schema.GetValue<TJSONObject>('properties', nil);
+      if Props = nil then Continue;
+      var ApplyObj := Props.GetValue<TJSONObject>('apply', nil);
+      if ApplyObj = nil then Continue;          // a read-only tool
+
+      var Desc := ApplyObj.GetValue<string>('description', '');
+      var HasToken := Props.GetValue<TJSONObject>('token', nil) <> nil;
+      if HasToken then
+      begin
+        Inc(Token);
+        if not Desc.ToLower.Contains('token') then
+          Note(Name + ': it hands out a token and does not say so');
+      end
+      else
+      begin
+        // The promise must not be made where it cannot be kept, and the
+        // caller has to learn what DOES protect the apply instead.
+        if Desc.ToLower.Contains('plus a token') then
+          Note(Name + ': promises a token it has no parameter for');
+        if not Desc.ToLower.Contains('no token') then
+          Note(Name + ': has no token and never says what protects an apply');
+        // The three shapes an apply can be protected by, and a tool has
+        // to name the one it uses: it looks again (re-runs its analysis),
+        // it works from the ids of a scan, or it compares the file with
+        // what the analysis saw and refuses a file that moved on.
+        if Desc.ToLower.Contains('re-runs') then Inc(Fresh)
+        else if Desc.ToLower.Contains('re-scans') then Inc(Ids)
+        else if Desc.ToLower.Contains('compares') then Inc(Guard)
+        else
+          Note(Name + ': says "no token" without naming what it does instead');
+      end;
+    end;
+  finally
+    Arr.Free;
+  end;
+
+  Assert.AreEqual('', Bad, Bad);
+  // ...and the test must not pass because it found nothing to look at.
+  Assert.IsTrue(Token >= 9, 'the tools that pin a preview with a token');
+  Assert.IsTrue(Fresh >= 5, 'the tools that re-run their own analysis');
+  Assert.IsTrue(Ids >= 4, 'the tools that act on the ids of a scan');
+  Assert.IsTrue(Guard >= 1, 'and the one that compares before it writes');
 end;
 
 procedure TMcpPipeRegressionTests.EveryToolGetsADeliberateWait;

@@ -6,6 +6,60 @@ development builds and were never released.
 
 ---
 
+## 2.0.2 - 2026-10-19
+
+A reviewing model was given the MCP server with nothing but the tool list and
+asked whether it could use the tools from the descriptions alone. It could,
+for almost everything - and the two gaps it named are fixed here. Nothing in
+the IDE changes; this is about what an agent can know before it calls.
+
+### The rules file of `semantic_replace` is described in the tool itself
+
+The format of `<project root>\semantic-replace.json` was nowhere in the MCP
+surface, so an agent could run existing rules but never write one. The tool
+now carries the shape (`find`, `replace`, `uses` as an array, `declaredIn`,
+the optional `localVar` block), what the match does and does not do (dotted
+identifier paths, not regular expressions; case-insensitive; never inside a
+comment or a string; a rule without `find` is dropped), and that the file is
+plain JSON rather than a Delphi source.
+
+### Every writing tool says what protects its `apply`
+
+The shared `apply` text ended with "plus a token" - and only 9 of the 23
+writing tools hand one out, so for the rest it was impossible to tell from
+the outside whether an apply is protected against a file that moved on. Each
+of them now names its own guard:
+
+- **a token** (9 tools): the preview pins the files *and* the arguments.
+- **it looks again** (8): `apply` re-runs the tool's own analysis on the
+  current buffers, so a plan made for a state that is gone cannot be carried
+  out.
+- **the ids of a scan** (4): `apply` re-scans and acts on the `fix_ids` you
+  name; an id names the PLACE, so an old one finds nothing rather than
+  something else.
+- **it compares** (2): `apply` reads the files again and refuses when they
+  differ from what was analysed.
+
+A contract test walks the shipped list and fails on a tool that promises a
+token it has no parameter for, or that says "no token" without naming what it
+does instead. That sweep found five more writing tools the report could not
+see, because their `apply` text was written per tool instead of shared -
+among them `convert_properties`, whose `apply` had no description at all.
+
+### An id that matches nothing is said out loud
+
+`interface_guids` and `dfm_events` ignored a `fix_ids` entry that matched no
+finding, while their note said the places you named are done - the same
+defect the line-ending check had in 1.25.1, in the one answer a caller cannot
+check. Both report `unknownIds` now.
+
+### Downloads
+
+The same three files as 2.0.1: the package for the 32-bit and the 64-bit IDE,
+and the MCP bridge.
+
+---
+
 ## 2.0.1 — 2026-10-17
 
 Everything since 1.23.2 (versions 1.23.3 … 2.0.1, 37 commits). The major
