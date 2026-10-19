@@ -168,6 +168,22 @@ type
     ///  sweep found 46 of them - including the apply of convert_properties,
     ///  which is why this rule is a test and not a round of fixes.</summary>
     [Test] procedure EveryToolParameterIsDescribed;
+    /// <summary>The "guide" tool answers what this server can do - the one
+    ///  text a fresh session can read before it knows the toolbox, and the
+    ///  only one that costs nothing until it is asked for. A guide that
+    ///  misses a tool, or names one that is gone, is worse than none, so
+    ///  the two lists are held against each other in all three directions:
+    ///  every tool in exactly one section, every section name a real tool,
+    ///  and every name present in the prose that section shows.</summary>
+    [Test] procedure TheGuideAndTheToolListAgree;
+    /// <summary>The initialize instructions are the ONLY text every
+    ///  session with this server registered pays for, whether it calls a
+    ///  tool or not (measured 2026-10-19: 946 characters, ~235 tokens,
+    ///  against ~680 for the 61 names and ~13 800 for all schemas). They
+    ///  were cut to that size in 1.11.1 and must not grow back into a
+    ///  catalogue - that is what the guide tool is for, which costs
+    ///  nothing until it is called.</summary>
+    [Test] procedure TheAlwaysLoadedInstructionsStayShort;
   end;
 
   /// <summary>Issue #13: while DelphiLSP loads a big project (12-30 s) its
@@ -1706,6 +1722,116 @@ begin
 
   Assert.AreEqual('', Bad, Bad);
   Assert.IsTrue(Props > 200, 'every parameter of every tool was looked at');
+end;
+
+procedure TMcpPipeRegressionTests.TheAlwaysLoadedInstructionsStayShort;
+var
+  Named: Integer;
+  Names: string;
+begin
+  var Instr := McpServerInstructions;
+  Assert.IsTrue(Length(Instr) > 400,
+    'the instructions must still say something: ' + IntToStr(Length(Instr)));
+  Assert.IsTrue(Length(Instr) <= 1100,
+    Format('every session pays for this text - %d characters is too much, ' +
+      'put it in the guide instead', [Length(Instr)]));
+
+  // It may name the few tools a session cannot do without (the three that
+  // exist with no IDE, and the buffer rule it states), but it is NOT the
+  // catalogue: a session gets the names anyway, and the guide has room.
+  Named := 0;
+  Names := '';
+  var Arr := McpToolDefinitions;
+  try
+    for var V in Arr do
+    begin
+      var N := (V as TJSONObject).GetValue<string>('name', '');
+      if (N <> '') and Instr.Contains(N) then
+      begin
+        Inc(Named);
+        Names := Names + ' ' + N;
+      end;
+    end;
+  finally
+    Arr.Free;
+  end;
+  Assert.IsTrue(Named <= 12,
+    Format('the instructions name %d tools (%s) - that is a list, and a ' +
+      'list belongs in the guide', [Named, Names.Trim]));
+  Assert.IsTrue(Instr.Contains('guide'),
+    'but the tool that explains the rest has to be findable: ' + Instr);
+end;
+
+procedure TMcpPipeRegressionTests.TheGuideAndTheToolListAgree;
+var
+  Bad: string;
+  Counted: Integer;
+
+  procedure Note(const AWhat: string);
+  begin
+    // ALL of them at once: one name at a time hides how stale it is.
+    if Bad <> '' then Bad := Bad + '; ';
+    Bad := Bad + AWhat;
+  end;
+
+begin
+  Bad := '';
+  Counted := 0;
+  var Secs := McpGuideSections;
+  Assert.IsTrue(Length(Secs) > 5,
+    'the guide must have its sections: ' + IntToStr(Length(Secs)));
+
+  var Text := McpGuideText;
+  Assert.IsTrue(Text.Contains('guide is this text'),
+    'the rendered guide is what the tool answers');
+
+  var Arr := McpToolDefinitions;
+  try
+    Assert.IsTrue((Arr <> nil) and (Arr.Count > 40),
+      'the shipped tool list is what this test walks');
+
+    // 1. every tool is in EXACTLY one section, and 3. the prose that
+    //    section shows really names it.
+    for var V in Arr do
+    begin
+      var Name := (V as TJSONObject).GetValue<string>('name', '');
+      if Name = '' then Continue;
+      Inc(Counted);
+      var Where := 0;
+      for var S in Secs do
+        for var T in S.Tools do
+          if SameText(T, Name) then
+          begin
+            Inc(Where);
+            if not S.Text.Contains(Name) then
+              Note(Format('%s is listed under "%s" but that text does not ' +
+                'name it', [Name, S.Title]));
+          end;
+      if Where = 0 then
+        Note(Name + ' is in no section of the guide')
+      else if Where > 1 then
+        Note(Format('%s is in %d sections', [Name, Where]));
+    end;
+
+    // 2. and no section names a tool that does not exist any more.
+    for var S in Secs do
+      for var T in S.Tools do
+      begin
+        var Found := False;
+        for var V in Arr do
+          if SameText((V as TJSONObject).GetValue<string>('name', ''), T) then
+            Found := True;
+        if not Found then
+          Note(Format('"%s" names %s, which is not a tool of this server',
+            [S.Title, T]));
+      end;
+  finally
+    Arr.Free;
+  end;
+
+  Assert.IsTrue(Counted > 40,
+    Format('the sweep must see the tools, counted %d', [Counted]));
+  Assert.AreEqual('', Bad, Bad);
 end;
 
 procedure TMcpPipeRegressionTests.EveryWritingToolSaysWhatProtectsItsApply;

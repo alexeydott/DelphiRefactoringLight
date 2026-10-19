@@ -6,6 +6,30 @@ development builds and were never released.
 
 ---
 
+## 2.1.0 - 2026-10-19
+
+### A "guide" tool: what this server can do, in one call
+
+A fresh Claude Code session sees the tool NAMES and the always-loaded
+instructions - 946 characters, deliberately no catalogue, because every
+session pays for them whether it calls a tool or not. What it could not get
+anywhere was the overview: which tool for which job, and the three rules
+that cost a round when you do not know them (the IDE buffer is the truth,
+`apply=false` first, an id or token belongs to ONE answer).
+
+`guide` answers exactly that as plain text, grouped by job and covering
+every tool. It takes no arguments, changes nothing, and - unlike every other
+tool here - it needs **no running IDE**: the bridge answers it itself, so a
+session that starts before the IDE is up can read it. It costs nothing until
+it is called, which is why it may be as long as it is useful (~2 500 tokens)
+while the instructions stay short.
+
+The guide cannot go stale unnoticed: a test holds it against the shipped
+tool definitions in all three directions - every tool in exactly one
+section, no section naming a tool that does not exist, and every name
+really present in the prose that section shows. It found its first defect
+immediately: the `lsp_*` section described the tools without naming them.
+
 ## 2.0.6 - 2026-10-19
 
 ### An answer carries no key twice

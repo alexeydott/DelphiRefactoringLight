@@ -252,6 +252,27 @@ function McpToolDefinitions: TJSONArray;
 ///  context, so the bridge sees a changed tool set without fetching it.
 ///  </summary>
 function McpToolsHash: string;
+type
+  /// <summary>One group of the guide text: a job, the prose that says how
+  ///  to do it, and the tools that prose names. The array is an INDEX of
+  ///  the text, not a second truth - a test requires every name in it to
+  ///  appear in the prose, every tool of McpToolDefinitions to be in
+  ///  exactly one section, and no section to name a tool that does not
+  ///  exist. So a tool added, renamed or dropped cannot leave the guide
+  ///  silently stale.</summary>
+  TMcpGuideSection = record
+    Title: string;
+    Text: string;
+    Tools: TArray<string>;
+  end;
+
+/// <summary>The sections the guide is built from.</summary>
+function McpGuideSections: TArray<TMcpGuideSection>;
+/// <summary>The whole guide as plain text - the answer of the "guide"
+///  tool. It costs nothing until it is called, which is why it may say
+///  what the always-loaded instructions deliberately leave out.</summary>
+function McpGuideText: string;
+
 function McpServerInstructions: string;
 
 /// <summary>The argument names a tool declares in its schema, plus
@@ -275,7 +296,10 @@ implementation
 
 uses
   System.Classes, System.StrUtils, System.IOUtils,
-  System.Generics.Collections;
+  System.Generics.Collections,
+  // the guide names the build it describes; Expert.Version is
+  // the one place that knows the number and uses nothing itself
+  Expert.Version;
 
 function McpPipeName(APid: Cardinal): string;
 begin
@@ -908,6 +932,16 @@ const
     '"inputSchema":{"type":"object","properties":{"instance":{"type":"integer",' +
     '"description":"Process id from ide_instances, 0 = automatic."}},' +
     '"required":["instance"]}},' +
+
+    '{"name":"guide",' +
+    '"description":"What this server can do, as plain text: the three ' +
+    'rules that save a round (the IDE buffer is the truth, apply=false ' +
+    'first, an id or token belongs to ONE answer), where to start, and ' +
+    'which tool for which job - all of them, grouped. Takes no ' +
+    'arguments, needs no running IDE and changes nothing. Read this when ' +
+    'you do not know this toolbox; a tool''s own description says how to ' +
+    'CALL it.",' +
+    '"inputSchema":{"type":"object","properties":{}}},' +
 
     '{"name":"get_status",' +
     '"description":"The Refactoring Light status window as data: identifier ' +
@@ -1668,6 +1702,269 @@ begin
      string.Join(', ', KnownToolArguments(ATool))]);
 end;
 
+function McpGuideSections: TArray<TMcpGuideSection>;
+
+  function Sec(const ATitle: string; const ATools: TArray<string>;
+    const ALines: TArray<string>): TMcpGuideSection;
+  begin
+    Result.Title := ATitle;
+    Result.Tools := ATools;
+    Result.Text := string.Join(#10, ALines);
+  end;
+
+begin
+  // One section per JOB, and every tool of McpToolDefinitions is in
+  // exactly one of them - TheGuideAndTheToolListAgree holds all three
+  // directions, so a tool added, renamed or dropped cannot leave this
+  // text silently stale.
+  Result := [
+    Sec('What this server is',
+      [],
+      [
+        'Delphi / RAD Studio refactoring through a RUNNING IDE that has the',
+        'Refactoring Light plugin loaded. The answers come from DelphiLSP and',
+        'the IDE itself, not from text matching: a rename verifies every',
+        'occurrence, a check reads the project model. Everything works on the',
+        'editor buffers, unsaved changes included.'
+      ]),
+    Sec('Three rules that save a round',
+      [],
+      [
+        '1. THE IDE BUFFER IS THE TRUTH. While a unit is open in the IDE, read',
+        '   and write it with buffer_read / buffer_edit / buffer_save. A file',
+        '   edited on disk behind the IDE desyncs its buffer, and the next',
+        '   Ctrl+S writes the old text back over your change.',
+        '2. CALL A WRITING TOOL WITH apply=false FIRST. Every one of them then',
+        '   answers "changes" (before/after per line) plus what it refuses and',
+        '   why, so the edit can be judged before it happens.',
+        '3. AN ID OR TOKEN BELONGS TO ONE ANSWER. A quick-fix id, a preview',
+        '   token and a check''s fix_ids expire with the next edit or the next',
+        '   scan; a stale one is refused by name rather than applied to',
+        '   something else. List again instead of reusing one.'
+      ]),
+    Sec('Where to start',
+      ['guide', 'get_status', 'ide_instances', 'select_ide'],
+      [
+        'get_status is the first call when something does not work: it says',
+        'whether the identifier index is ready, whether DelphiLSP answers,',
+        'what the live checker found and whether the project has a',
+        '.delphilsp.json at all. Most "no result" answers have their reason',
+        'there.',
+        'ide_instances lists the running IDEs; select_ide pins one for this',
+        'session. Normally neither is needed - the target follows the file',
+        'argument and the working directory - but with two IDEs open an',
+        'ambiguous call is refused rather than guessed.',
+        'guide is this text.'
+      ]),
+    Sec('Reading and writing a unit',
+      ['buffer_open', 'buffer_read', 'buffer_edit', 'buffer_list', 
+       'buffer_save', 'buffer_close', 'scratch_analyze', 'scratch_close'],
+      [
+        'buffer_read gives the current text (buffer when open, else disk) with',
+        'a revision; buffer_edit replaces an exact, unique piece of text and',
+        'writes only the lines that really change, so the IDE marks just that',
+        'spot and one Ctrl+Z undoes it. buffer_save writes a loaded buffer to',
+        'disk like Ctrl+S - for a FORM unit it also writes the .dfm and may',
+        'extend the unit''s uses clause, and the answer names those files.',
+        'buffer_open without visible=true loads a file HEADLESS (memory only,',
+        'no editor tab): useful to check an edit with get_diagnostics before',
+        'buffer_close saves or discards it. buffer_list says which files are',
+        'loaded and which of them the user can see.',
+        'scratch_analyze hands DelphiLSP a unit that exists only in memory and',
+        'returns its diagnostics and quick fixes - the way to try something',
+        'without touching the project; scratch_close drops it again.'
+      ]),
+    Sec('Errors and quick fixes',
+      ['get_diagnostics', 'get_quick_fixes', 'apply_quick_fix', 
+       'apply_quick_fixes'],
+      [
+        'get_diagnostics returns the compiler diagnostics for a file, merged',
+        'from the sources that are fresh for its current content (the IDE''s',
+        'Error Insight, the Messages window and the plugin''s own DelphiLSP',
+        'session), with the revision they describe.',
+        'get_quick_fixes turns them into offers: each carries its diagnostic,',
+        'the affected line and the real edit as "changes", so a fix can be',
+        'judged without applying it. apply_quick_fix applies one by id,',
+        'apply_quick_fixes a whole kind or a list of ids in one pass',
+        '(bottom-up, and a fix whose anchor text has moved is skipped and',
+        'reported rather than applied elsewhere).',
+        'Two fixes are deliberately refused through this server: adding a unit',
+        'that only the browsing path can see, and removing a private member',
+        'with a non-empty body - both need a human decision.'
+      ]),
+    Sec('Finding where something is used',
+      ['find_references', 'find_implementations', 'find_original_symbol', 
+       'find_unit', 'find_unit_references'],
+      [
+        'find_references is the verified search: a text scan over the project',
+        'scope, then DelphiLSP for every candidate, plus what the sources',
+        'themselves can decide (the type of a qualifier, the argument count of',
+        'an overload). Each row carries its kind (declaration, call, write,',
+        'read, ...) and, where it applies, that it was reached through an',
+        'interface. An occurrence nobody could verify is LISTED and marked,',
+        'never silently dropped.',
+        'find_implementations answers for a method, an interface or a type',
+        'header (every descendant), find_original_symbol where an identifier',
+        'is DECLARED - including the cases lsp_definition stays silent about,',
+        'because it falls back to the identifier index.',
+        'find_unit answers which unit declares an identifier (that is the',
+        'index, not the compiler), find_unit_references which units use a',
+        'given unit - and which list it in their uses clause without using',
+        'anything of it.'
+      ]),
+    Sec('Asking DelphiLSP directly',
+      ['lsp_hover', 'lsp_definition', 'lsp_implementation', 
+       'lsp_references', 'lsp_document_symbols', 'lsp_signature_help', 
+       'lsp_completion', 'lsp_request'],
+      [
+        'The raw server answers for ONE position: lsp_hover, lsp_definition,',
+        'lsp_implementation, lsp_references, lsp_document_symbols,',
+        'lsp_signature_help, lsp_completion - and lsp_request for any other',
+        'method. The unit you ask about need not be open: the tool reads it,',
+        'sends that text to the session and waits for its analysis.',
+        'Use them to look at ONE position. For a question about a whole',
+        'project, the find_* tools are more complete: they add the text scan,',
+        'the interface links and the source resolution that the server alone',
+        'does not give. textDocument/references is not even announced by',
+        'DelphiLSP, so lsp_references usually answers nothing - that is why',
+        'find_references verifies candidate by candidate.'
+      ]),
+    Sec('Renaming, signatures, deleting',
+      ['rename_preview', 'rename_apply', 'change_signature', 
+       'safe_delete', 'edit_method'],
+      [
+        'rename_preview verifies every occurrence first and answers them with',
+        'a token plus a warning when the declaration lies outside the chosen',
+        'scope; rename_apply then writes exactly that preview. Form files are',
+        'part of it: a renamed component or event handler is changed in the',
+        '.dfm as well, and a form open in the designer is renamed THROUGH the',
+        'designer.',
+        'change_signature rewrites a routine''s parameter list together with',
+        'the whole family (interface, overrides) and its call sites, and it',
+        'refuses rather than guesses when a parameter the body still uses',
+        'would go.',
+        'safe_delete says whether a symbol can go: it lists every use it',
+        'found, counts anything it could not verify as a use, and vetoes what',
+        'is reachable without a textual call (virtual, published, an',
+        'interface member).',
+        'edit_method edits what a class declares - the ROUTINES only, never a',
+        'field or a property: signature, modifiers, and the class or unit a',
+        'method lives in. It does the mechanical half and NAMES the rest (the',
+        'members of the old class the body still uses, the call sites), which',
+        'is why it verifies those sites before the edit and lists them',
+        'afterwards.'
+      ]),
+    Sec('Taking code apart and moving it',
+      ['extract_method', 'extract_variable', 'extract_interface', 
+       'add_iinterface', 'declare_constant', 'wrap_try_finally', 
+       'convert_properties', 'move_to_unit', 'move_to_new_unit', 
+       'remove_with', 'semantic_replace', 'expand_includes'],
+      [
+        'extract_method takes a line range into a new method (parameters, var',
+        'and const decided from what the block reads and WRITES, Result',
+        'handled as the function''s return value); extract_variable hoists an',
+        'expression into a local; wrap_try_finally wraps a statement and',
+        'guesses the cleanup call (Create -> Free, BeginUpdate -> EndUpdate).',
+        'declare_constant declares a selected literal - or one you type - as a',
+        'const or resourcestring, locally, in the class or at unit level, and',
+        'can replace every other occurrence of that value.',
+        'extract_interface builds an interface from a class (and adds it to an',
+        'existing unit when the target is there); it also reports whether the',
+        'class can implement an interface at all, and offers either the',
+        'ancestor change or add_iinterface, which implements QueryInterface /',
+        '_AddRef / _Release by delegation.',
+        'move_to_unit and move_to_new_unit move a declaration with its body,',
+        'take the units the moved code needs along and refuse an interface',
+        'cycle. convert_properties turns field access into property accessors',
+        'and back. remove_with rewrites a with-statement into qualified',
+        'access, and refuses the cases where that would change behaviour (a',
+        'record target that would become a copy, for one).',
+        'semantic_replace replaces dotted identifier paths by the rules of',
+        'semantic-replace.json, with every match verified against the symbol''s',
+        'declaration. expand_includes writes {$I} files into the unit, marked',
+        '- for reading, not as a refactoring.'
+      ]),
+    Sec('uses clauses',
+      ['add_unit', 'remove_unit', 'analyze_uses', 'cleanup_uses', 
+       'uses_path', 'uses_cycles'],
+      [
+        'add_unit / remove_unit edit one entry (interface or implementation,',
+        'comment- and directive-aware). analyze_uses judges every entry of a',
+        'file: used, unused, movable to the implementation, kept because the',
+        'form DESIGNER writes it itself, or not analysable and why.',
+        'cleanup_uses does what that verdict allows. For a FORM unit the',
+        'designer is asked, and an entry it reported is never touched - the',
+        'IDE would write it straight back.',
+        'uses_path answers the shortest chain of uses entries from one unit to',
+        'another - the question a circular-reference error poses -, uses_cycles',
+        'the cycles of the project.'
+      ]),
+    Sec('Project-wide checks',
+      ['signature_check', 'dfm_events', 'interface_guids', 
+       'debug_consistency', 'unused_units', 'line_endings', 
+       'file_encoding'],
+      [
+        'Each of these scans the project and reports findings with an id;',
+        'those that can fix something do so only for the ids you NAME, because',
+        'which of several places is the right one is not theirs to decide.',
+        'signature_check finds declarations and implementations that disagree',
+        'and can align them. dfm_events finds event handlers a form expects',
+        'and the unit does not declare (or declares with another parameter',
+        'list). interface_guids finds duplicate and missing GUIDs - a',
+        'duplicate makes Supports/QueryInterface hand out the wrong object -',
+        'and gives the declarations you name a fresh one.',
+        'debug_consistency looks for the reasons a debugger stops at the wrong',
+        'line: a second copy of a unit on the search path, a stray .dcu, mixed',
+        'line endings, {$D-} and friends, a stale executable.',
+        'unused_units lists units the project FILE carries although nothing',
+        'names them any more (read-only). line_endings and file_encoding find',
+        'files Delphi reads wrongly - mixed or LF-only breaks, and above all',
+        'UTF-8 without a BOM, which the compiler reads as ANSI so one umlaut',
+        'becomes two characters - and convert the ones you name.'
+      ]),
+    Sec('Version control',
+      ['blame', 'commit_info'],
+      [
+        'blame answers per line who last changed it (git and svn), mapped onto',
+        'the current buffer, so an unsaved edit does not shift the authors.',
+        'commit_info gives one commit''s metadata, its changed files and the',
+        'diff per file.'
+      ]),
+    Sec('What this server does not do',
+      [],
+      [
+        'It has no parser of its own for name resolution: whether an',
+        'occurrence belongs to your symbol is DelphiLSP''s answer, plus what',
+        'the sources can decide without it. So when the server is silent for a',
+        'unit - typically because that unit, or one it uses, is taken from a',
+        'precompiled .dcu instead of its source - a verified search finds',
+        'less, and it SAYS so instead of answering confidently.',
+        'It never changes code without apply=true, it refuses a write while a',
+        'modal dialog is open in the IDE, and it does not close an editor tab',
+        'the user can see.'
+      ])
+  ];
+end;
+
+function McpGuideText: string;
+var
+  SB: TStringBuilder;
+begin
+  SB := TStringBuilder.Create;
+  try
+    SB.Append('REFACTORING LIGHT - what this server can do');
+    SB.Append(#10).Append('Plugin / bridge version: ').Append(PluginVersion);
+    for var S in McpGuideSections do
+    begin
+      SB.Append(#10#10).Append('== ').Append(S.Title);
+      SB.Append(#10).Append(S.Text);
+    end;
+    Result := SB.ToString;
+  finally
+    SB.Free;
+  end;
+end;
+
 function McpServerInstructions: string;
 begin
   // Loaded into EVERY Claude Code session that has the server registered,
@@ -1687,7 +1984,8 @@ begin
     'work (no fixes, no diagnostics, index not ready), get_status says why. ' +
     'With several IDEs the target follows the file argument and the working ' +
     'directory; if that is ambiguous, use ide_instances and select_ide. ' +
-    'While no IDE runs only ide_instances and select_ide exist; the other ' +
+    'While no IDE runs only guide, ide_instances and select_ide exist; ' +
+    'the other ' +
     'tools appear when an IDE with the plugin starts.';
 end;
 
