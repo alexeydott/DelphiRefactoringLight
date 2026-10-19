@@ -64,7 +64,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.JSON,
   System.Generics.Collections, System.SyncObjs, System.Math,
   Expert.McpServer, Expert.EditorHelperIntf, Expert.LspManager,
-  Expert.McpTools, Lsp.Protocol, Lsp.Uri, Delphi.FileEncoding;
+  Expert.McpTools, Mcp.Protocol, Lsp.Protocol, Lsp.Uri, Delphi.FileEncoding;
 
 var
   GSyncLock: TCriticalSection = nil;
@@ -171,29 +171,15 @@ end;
 // a second AddPair('note') would be a duplicate KEY (which is what
 // lsp_hover answered until 2.0.6).
 procedure AddFreshNote(ARes: TJSONObject; AClient: TLspClient;
-  const AFile: string; const APrefix: string = '');
-var
-  Pre: string;
+  const AFile: string; const APrefix: string = '';
+  ASuggestIndex: Boolean = False);
 begin
-  Pre := '';
-  if APrefix <> '' then Pre := APrefix + ' ';
-  var Ago := McpLspSentAgoMs(AClient, AFile);
-  if (Ago >= 0) and (Ago < 60000) then
-    SetJsonNote(ARes, Pre + Format('%s was (re)sent to DelphiLSP %d s ago because ' +
-      'its content changed - it may still be analysing it; retry shortly. If ' +
-      'the unit stays silent, the usual cause is that a unit (or one it uses) is taken from a precompiled .dcu ' +
-        'instead of its source - e.g. DCUs of the project''s own units on ' +
-        'the IDE library path or in the DCU output directory. To see it: ' +
-        'start the IDE with REFACTORINGLIGHT_LSP_ARGS=-LogModes 255 and read ' +
-        '%%TEMP%%\DelphiLSP\Agent*.log.',
-      [ExtractFileName(AFile), Ago div 1000]))
-  else
-    SetJsonNote(ARes, Pre + 'DelphiLSP returned nothing. If the unit stays ' +
-      'silent, the usual cause is that a unit (or one it uses) is taken from a precompiled .dcu ' +
-        'instead of its source - e.g. DCUs of the project''s own units on ' +
-        'the IDE library path or in the DCU output directory. To see it: ' +
-        'start the IDE with REFACTORINGLIGHT_LSP_ARGS=-LogModes 255 and read ' +
-        '%TEMP%\DelphiLSP\Agent*.log.');
+  // The TEXT is a pure rule (Mcp.Protocol) so a test can hold it; here
+  // only the two facts it needs are measured: how long ago we sent the
+  // file, and whether the session has analysed it at all.
+  SetJsonNote(ARes, LspEmptyAnswerNote(APrefix, AFile,
+    McpLspSentAgoMs(AClient, AFile),
+    AClient.HasReceivedDiagnostics(AFile), ASuggestIndex));
 end;
 
 function McpWaitLspAnalysed(AClient: TLspClient; const AFile: string;
@@ -293,7 +279,7 @@ begin
   Res.AddPair('hover', H);
   if H = '' then
     AddFreshNote(Res, Client, F,
-      'DelphiLSP returned nothing for this position.');
+      'DelphiLSP returned nothing for this position.', True);
   Result := McpOk(Res);
 end;
 
@@ -308,7 +294,7 @@ begin
   var Res := TJSONObject.Create;
   var Locs := Client.GotoDefinition(F, L0, C0);
   Res.AddPair('locations', LocationsToJson(Locs));
-  if Length(Locs) = 0 then AddFreshNote(Res, Client, F);
+  if Length(Locs) = 0 then AddFreshNote(Res, Client, F, '', True);
   Result := McpOk(Res);
 end;
 
@@ -327,7 +313,7 @@ begin
     'find_implementations (plugin scan) is usually more complete.';
   // An empty answer deserves the reason as well, like lsp_definition's -
   // and it goes into the SAME note, never a second one.
-  if Length(Locs) = 0 then AddFreshNote(Res, Client, F, What)
+  if Length(Locs) = 0 then AddFreshNote(Res, Client, F, What, True)
   else SetJsonNote(Res, What);
   Result := McpOk(Res);
 end;

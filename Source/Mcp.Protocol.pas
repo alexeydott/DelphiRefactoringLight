@@ -266,6 +266,19 @@ type
     Tools: TArray<string>;
   end;
 
+/// <summary>What an EMPTY lsp_* answer says. APrefix is the tool''s own
+///  sentence and is never repeated by the generic text. AAgoMs is how long
+///  ago the file was (re)sent, -1 for "not by us"; AUnitAnalysed says
+///  whether the session has really analysed this unit, which decides the
+///  cause: a unit it never analysed is usually taken from a precompiled
+///  .dcu, while a unit that answers hover but no definition is a symbol
+///  DelphiLSP does not resolve (the private/public overload pair of
+///  RSS-5463 is the known one) - and THEN find_original_symbol, which asks
+///  the identifier index, is the way out. Blaming the .dcu in that case
+///  sent a reviewing session looking in the wrong place.</summary>
+function LspEmptyAnswerNote(const APrefix, AFile: string; AAgoMs: Integer;
+  AUnitAnalysed, ASuggestIndex: Boolean): string;
+
 /// <summary>The sections the guide is built from.</summary>
 function McpGuideSections: TArray<TMcpGuideSection>;
 /// <summary>The whole guide as plain text - the answer of the "guide"
@@ -1700,6 +1713,57 @@ begin
     'takes: %s.',
     [string.Join(', ', Unknown), ATool,
      string.Join(', ', KnownToolArguments(ATool))]);
+end;
+
+function LspEmptyAnswerNote(const APrefix, AFile: string; AAgoMs: Integer;
+  AUnitAnalysed, ASuggestIndex: Boolean): string;
+
+  procedure Add(const AText: string);
+  begin
+    if Result <> '' then Result := Result + ' ';
+    Result := Result + AText;
+  end;
+
+begin
+  Result := '';
+  // The tool''s own sentence comes first and the generic text must not
+  // say it again - "DelphiLSP returned nothing for this position.
+  // DelphiLSP returned nothing." was exactly that (2.0.6).
+  if APrefix <> '' then
+    Add(APrefix)
+  else
+    Add('DelphiLSP returned nothing.');
+
+  if (AAgoMs >= 0) and (AAgoMs < 60000) then
+    Add(Format('%s was (re)sent to DelphiLSP %d s ago because its content ' +
+      'changed, so it may still be analysing it: retry shortly.',
+      [ExtractFileName(AFile), AAgoMs div 1000]));
+
+  if AUnitAnalysed then
+  begin
+    // The unit is fine - this POSITION is what the server does not
+    // resolve, so the .dcu story would be a wrong lead.
+    Add('The session HAS analysed this unit, so this is about the position, ' +
+      'not the unit: DelphiLSP does not resolve this symbol. A private / ' +
+      'public overload pair is the known case (Delphi 13.1, RSS-5463).');
+    if ASuggestIndex then
+      Add('find_original_symbol answers such a case from the identifier ' +
+        'index - and for a declaration that is usually the answer you want.');
+  end
+  else
+  begin
+    Add('The session has analysed nothing of this unit yet. When that ' +
+      'lasts, the usual cause is that the unit - or one it uses - is taken ' +
+      'from a precompiled .dcu instead of its source: DCUs of the ' +
+      'project''s own units on the IDE library path or in the DCU output ' +
+      'directory. get_status says whether the session is still loading the ' +
+      'project; to see the resolution itself, start the IDE with ' +
+      'REFACTORINGLIGHT_LSP_ARGS=-LogModes 255 (or switch the session log ' +
+      'on in the options) and read %TEMP%\DelphiLSP\Agent*.log.');
+    if ASuggestIndex then
+      Add('find_original_symbol does not depend on the session for its ' +
+        'last step, so it may answer anyway.');
+  end;
 end;
 
 function McpGuideSections: TArray<TMcpGuideSection>;

@@ -184,6 +184,14 @@ type
     ///  catalogue - that is what the guide tool is for, which costs
     ///  nothing until it is called.</summary>
     [Test] procedure TheAlwaysLoadedInstructionsStayShort;
+    /// <summary>Reported by a reviewing session on 2.0.6: an empty lsp_*
+    ///  answer always blamed a precompiled .dcu as the "usual cause" - and
+    ///  in the case it had, hover ANSWERED and only the definition was
+    ///  unresolved, so the hint sent it looking in the wrong place and
+    ///  never named find_original_symbol, which does answer there. Plus
+    ///  2.0.6's own regression: the tool's sentence and the generic text
+    ///  both opened with "DelphiLSP returned nothing".</summary>
+    [Test] procedure AnEmptyAnswerNamesTheRightCause;
   end;
 
   /// <summary>Issue #13: while DelphiLSP loads a big project (12-30 s) its
@@ -1722,6 +1730,59 @@ begin
 
   Assert.AreEqual('', Bad, Bad);
   Assert.IsTrue(Props > 200, 'every parameter of every tool was looked at');
+end;
+
+procedure TMcpPipeRegressionTests.AnEmptyAnswerNamesTheRightCause;
+const
+  Mine = 'DelphiLSP returned nothing for this position.';
+  F = 'C:\p\Expert.LspManager.pas';
+
+  function Occurrences(const AText, AWhat: string): Integer;
+  begin
+    Result := 0;
+    var P := Pos(AWhat, AText);
+    while P > 0 do
+    begin
+      Inc(Result);
+      P := Pos(AWhat, AText, P + 1);
+    end;
+  end;
+
+begin
+  // The reported case: the unit IS analysed (hover answers), only this
+  // position is unresolved.
+  var Pos_ := LspEmptyAnswerNote(Mine, F, -1, True, True);
+  Assert.AreEqual(1, Occurrences(Pos_, 'DelphiLSP returned nothing'),
+    'the sentence is said ONCE, not by the prefix AND the generic text: ' +
+    Pos_);
+  Assert.IsTrue(Pos_.StartsWith(Mine), 'the tool speaks first: ' + Pos_);
+  Assert.IsFalse(Pos_.Contains('.dcu'),
+    'a unit the session HAS analysed is not a .dcu problem: ' + Pos_);
+  Assert.IsTrue(Pos_.Contains('find_original_symbol'),
+    'and the way out is named: ' + Pos_);
+  Assert.IsTrue(Pos_.Contains('RSS-5463'),
+    'with the known case of it: ' + Pos_);
+
+  // The other half: nothing of the unit was ever analysed. THERE the .dcu
+  // is the usual cause, and that is where the recipe belongs.
+  var Silent := LspEmptyAnswerNote('', F, -1, False, True);
+  Assert.IsTrue(Silent.StartsWith('DelphiLSP returned nothing'),
+    'without a prefix the note says it itself: ' + Silent);
+  Assert.IsTrue(Silent.Contains('.dcu'), 'the usual cause: ' + Silent);
+  Assert.IsTrue(Silent.Contains('LogModes 255'), 'and how to see it: ' + Silent);
+  Assert.IsFalse(Silent.Contains('RSS-5463'),
+    'but not the position story, which does not apply here: ' + Silent);
+
+  // A file we have just sent is simply not ready yet - that comes first,
+  // before any cause at all.
+  var Fresh := LspEmptyAnswerNote(Mine, F, 2500, False, False);
+  Assert.IsTrue(Fresh.Contains('2 s ago'), 'how long ago, in seconds: ' + Fresh);
+  Assert.IsTrue(Fresh.Contains('Expert.LspManager.pas'),
+    'and which file: ' + Fresh);
+  Assert.IsFalse(Fresh.Contains('find_original_symbol'),
+    'a tool that is not about declarations does not point there: ' + Fresh);
+  Assert.AreEqual(1, Occurrences(Fresh, 'DelphiLSP returned nothing'),
+    'still once: ' + Fresh);
 end;
 
 procedure TMcpPipeRegressionTests.TheAlwaysLoadedInstructionsStayShort;

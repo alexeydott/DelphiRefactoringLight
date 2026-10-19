@@ -6,6 +6,24 @@ development builds and were never released.
 
 ---
 
+## 2.1.1 - 2026-10-19
+
+### An empty LSP answer names the right cause
+
+When an `lsp_*` tool answered nothing, the note always blamed a precompiled
+`.dcu` as the "usual cause" - and in the case a reviewing session actually
+hit, `lsp_hover` ANSWERED at that very position and only the definition was
+unresolved, so the hint pointed at the wrong place and never mentioned
+`find_original_symbol`, which does answer there. The note is derived now:
+when the session has analysed the unit, it says that this is about the
+POSITION (the private/public overload pair of Delphi 13.1 RSS-5463 is the
+known case) and names `find_original_symbol`; only for a unit it has
+analysed nothing of does the `.dcu` paragraph and the log recipe appear.
+Fixed with it, a regression of 2.0.6: the tool's own sentence and the
+generic text both opened with "DelphiLSP returned nothing", so the note read
+"DelphiLSP returned nothing for this position. DelphiLSP returned nothing.
+If ...". The text is one pure rule with a test now.
+
 ## 2.1.0 - 2026-10-19
 
 ### A "guide" tool: what this server can do, in one call
