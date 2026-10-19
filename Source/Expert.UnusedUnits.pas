@@ -232,7 +232,7 @@ function CollectUnusedProjectUnits(const AUnits: TArray<TUnitFacts>;
   const ADetails: TUnusedUnitDetails): TArray<TUnusedUnitIssue>;
 var
   Referenced: TDictionary<string, Boolean>;
-  Notes, Unreadable: TStringList;
+  Notes, Unreadable, NoSource: TStringList;
   Issues: TList<TUnusedUnitIssue>;
   MainBody, MainName: string;
   HaveMain: Boolean;
@@ -246,6 +246,7 @@ begin
   Referenced := TDictionary<string, Boolean>.Create;
   Notes := TStringList.Create;
   Unreadable := TStringList.Create;
+  NoSource := TStringList.Create;
   Issues := TList<TUnusedUnitIssue>.Create;
   try
     MainBody := '';
@@ -268,10 +269,14 @@ begin
         // Its uses clause is unknown, so it cannot clear anyone. That makes
         // the whole answer incomplete, which has to be said rather than
         // hidden (a file we did not read is not a file without references).
+        // The two cases are NOT the same sentence: a file that is there and
+        // unreadable was not checked, while a unit with no file at all IS a
+        // finding below - saying "could not be read" about it would
+        // contradict its own row.
         if F.FileName <> '' then
           Unreadable.Add(F.FileName)
         else
-          Unreadable.Add(F.UnitName);
+          NoSource.Add(F.UnitName);
         Continue;
       end;
       for N in F.UsesNames do
@@ -382,12 +387,18 @@ begin
 
     if Unreadable.Count > 0 then
     begin
-      Notes.Add(Format('%d listed unit(s) could not be read - no source ' +
-        'found, or the file is unreadable; a uses clause of theirs may ' +
-        'name a unit listed below:', [Unreadable.Count]));
+      Notes.Add(Format('%d listed unit(s) could not be read, so nothing ' +
+        'about them was decided; a uses clause of theirs may name a unit ' +
+        'listed below:', [Unreadable.Count]));
       for I := 0 to Unreadable.Count - 1 do
         Notes.Add('    ' + Unreadable[I]);
     end;
+
+    if NoSource.Count > 0 then
+      Notes.Add(Format('%d listed unit(s) have no source this check could ' +
+        'find - they are reported below as a finding. Should such a file ' +
+        'sit somewhere only the compiler''s search path knows, its uses ' +
+        'clause may name another unit listed here.', [NoSource.Count]));
 
     Notes.Add('Only ONE layer is reported: two unused units that use each ' +
       'other keep each other alive. Run the check again after removing ' +
@@ -397,6 +408,7 @@ begin
     ANotes := Notes.ToStringArray;
   finally
     Issues.Free;
+    NoSource.Free;
     Unreadable.Free;
     Notes.Free;
     Referenced.Free;

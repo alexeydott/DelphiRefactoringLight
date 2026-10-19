@@ -6,6 +6,19 @@ development builds and were never released.
 
 ---
 
+## 2.0.4 - 2026-10-19
+
+### A unit with no source is a finding, not a gap
+
+Measured on the project of the report that produced the check's
+`no_source_found` kind: the row said "the project lists a unit that is not
+there", while the notes above it counted the same unit among those that
+"could not be read" - one answer contradicting itself, and the half-answer
+the kind was introduced to avoid. The two cases have their own sentence now:
+a file that is there and unreadable was not checked, a unit with no file at
+all is reported below as a finding (with the one place the check cannot look
+named: a path only the compiler knows).
+
 ## 2.0.3 - 2026-10-19
 
 A reviewing model was given the MCP server with nothing but the tool list and

@@ -89,6 +89,23 @@ begin
   Result := False;
 end;
 
+/// <summary>The first note containing AText, or '' - the notes are what
+///  limits the answer, so a test about them has to name the sentence.</summary>
+function NoteAbout(const ANotes: TArray<string>; const AText: string): string;
+var
+  S: string;
+begin
+  for S in ANotes do
+    if S.Contains(AText) then
+      Exit(S);
+  Result := '';
+end;
+
+function NotesText(const ANotes: TArray<string>): string;
+begin
+  Result := string.Join(' / ', ANotes);
+end;
+
 function NamesOf(const AIssues: TArray<TUnusedUnitIssue>): string;
 var
   I: TUnusedUnitIssue;
@@ -295,6 +312,22 @@ begin
     'the form the main body creates is used: ' + NamesOf(Issues));
   Assert.IsTrue(FindIssue(Issues, 'Unit6', Other), 'Unit6 is unused');
   Assert.AreEqual(Ord(uukSafe), Ord(Other.Kind), 'and safe to remove');
+
+  // Measured live on his Project7 (2.0.3): the notes called Unit7 a unit
+  // that "could not be read" while its own row says the project lists a
+  // unit that is not there - one answer contradicting itself. The two
+  // cases get their own sentence.
+  Assert.IsTrue(NoteAbout(Notes, 'no source this check could find') <> '',
+    'a unit with no file is named as a FINDING, not as "could not be ' +
+    'read": ' + NotesText(Notes));
+  Assert.IsFalse(NoteAbout(Notes, 'no source this check could find')
+    .Contains('could not be read'),
+    'and that sentence does not say it was unreadable: ' +
+    NoteAbout(Notes, 'no source this check could find'));
+  Assert.IsTrue(NoteAbout(Notes, 'could not be read').Contains('nothing ' +
+    'about them was decided'),
+    'while the file that really could not be read keeps that sentence: ' +
+    NotesText(Notes));
 end;
 
 procedure TUnusedUnitsTests.AFileLessFindingPointsAtTheEntryThatListsIt;
