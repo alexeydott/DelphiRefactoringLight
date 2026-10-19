@@ -3404,14 +3404,21 @@ begin
         for var U in Unknown do UArr.Add(U);
         Res.AddPair('unknownIds', UArr);
       end;
-    end;
-    if DoApply then
-      Res.AddPair('note', 'The declarations you named carry a fresh GUID now, ' +
+      // ...and the note says what really happened, counted from the
+      // outcomes (2.0.4: it asserted success after an apply that matched
+      // nothing at all).
+      var Done := 0;
+      var Failed := 0;
+      for var R in Applied.Values do
+        if R.StartsWith('NOT ') then Inc(Failed) else Inc(Done);
+      Res.AddPair('fixed', TJSONNumber.Create(Done));
+      if Failed > 0 then Res.AddPair('notFixed', TJSONNumber.Create(Failed));
+      Res.AddPair('note', AppliedByIdsNote(Done, Failed, Length(Unknown),
+        'declaration(s)', 'carry a fresh GUID now',
         'in the IDE buffer when the file was open (not saved) and on disk ' +
-        'otherwise; "result" says per entry what happened. The counts above ' +
-        'are from the scan BEFORE the change - run the check again to see ' +
-        'the state after it.')
-    else
+        'otherwise'));
+    end;
+    if not DoApply then
       Res.AddPair('note', 'A duplicate GUID makes Supports/QueryInterface ' +
         'return the WRONG object. An interface paired with a dispinterface ' +
         'on the same GUID is a type-library import and not counted. Nothing ' +
@@ -3544,13 +3551,19 @@ begin
         for var U in Unknown do UArr.Add(U);
         Res.AddPair('unknownIds', UArr);
       end;
+      var Done := 0;
+      var Failed := 0;
+      for var R in Applied.Values do
+        if R.StartsWith('NOT ') then Inc(Failed) else Inc(Done);
+      Res.AddPair('fixed', TJSONNumber.Create(Done));
+      if Failed > 0 then Res.AddPair('notFixed', TJSONNumber.Create(Failed));
+      Res.AddPair('note', AppliedByIdsNote(Done, Failed, Length(Unknown),
+        'issue(s)', 'were fixed', 'in the IDE buffers (not saved)') +
+        ' A missing handler is generated as an EMPTY method - in an ' +
+        'inherited form that shadows the ancestor''s handler, which is why ' +
+        'nothing is fixed without naming its id.');
     end;
-    if DoApply then
-      Res.AddPair('note', 'Fixed handlers are in the IDE buffers (not saved). ' +
-        'A missing handler is generated as an EMPTY method - in an inherited ' +
-        'form that shadows the ancestor''s handler, which is why nothing is ' +
-        'fixed without naming its id.')
-    else
+    if not DoApply then
       Res.AddPair('note', 'Nothing was changed. Pass apply=true with "fix_ids" ' +
         'to generate the missing handlers / correct the parameter lists.');
     Result := McpOk(Res);

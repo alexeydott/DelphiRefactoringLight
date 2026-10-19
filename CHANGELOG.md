@@ -6,6 +6,19 @@ development builds and were never released.
 
 ---
 
+## 2.0.5 - 2026-10-19
+
+### An apply says what it really did
+
+`interface_guids` and `dfm_events` had a fixed note for `apply=true`, so an
+apply whose ids matched nothing at all still answered "The declarations you
+named carry a fresh GUID now" - measured live, with `unknownIds` naming the
+id right next to it. Both tools derive the sentence from the outcomes now,
+in one shared place: how many were done, how many failed, how many ids
+matched no finding - and "NOTHING was changed" when that is the truth. They
+also report `fixed` / `notFixed` as numbers, like the two project checks that
+had it right.
+
 ## 2.0.4 - 2026-10-19
 
 ### A unit with no source is a finding, not a gap

@@ -243,6 +243,17 @@ function SelectReportRows(const AIds, AActedIds: TArray<string>;
 /// <summary>Ids the caller named that no finding carries. Shared.</summary>
 function UnknownReportIds(const AIds, ANamed: TArray<string>): TArray<string>;
 
+/// <summary>What an apply by ids really DID, as one sentence - derived,
+///  never asserted. Measured live (2.0.4): interface_guids answered "the
+///  declarations you named carry a fresh GUID now" after an apply in which
+///  nothing matched at all, which is the lie 1.25.1 found in the
+///  line-ending tool. ADone / AFailed are what the per-entry outcomes say,
+///  AUnknown how many ids matched no finding. AThing is what is counted
+///  ("declaration(s)"), ADoneText what happened to them ("carry a fresh
+///  GUID now"), AWhere where the change lives.</summary>
+function AppliedByIdsNote(ADone, AFailed, AUnknown: Integer;
+  const AThing, ADoneText, AWhere: string): string;
+
 /// <summary>Which findings an answer must carry, as indexes into AIssues:
 ///  every one that was ACTED on, whatever AMax says, plus as many of the
 ///  rest as fit. A row that was acted on IS the answer to the call - a
@@ -690,6 +701,31 @@ begin
       end;
     if not Known then Result := Result + [Name];
   end;
+end;
+
+function AppliedByIdsNote(ADone, AFailed, AUnknown: Integer;
+  const AThing, ADoneText, AWhere: string): string;
+begin
+  if ADone > 0 then
+  begin
+    Result := Format('%d %s %s, %s.', [ADone, AThing, ADoneText, AWhere]);
+    if AFailed > 0 then
+      Result := Result + Format(' %d could NOT be done - "result" says why ' +
+        'per entry.', [AFailed]);
+    Result := Result + ' The counts above are from the scan BEFORE the ' +
+      'change - list again for the state now.';
+  end
+  else if AFailed > 0 then
+    Result := Format('NOTHING was changed: all %d %s this call named failed ' +
+      '- "result" says why per entry.', [AFailed, AThing])
+  else
+    Result := 'NOTHING was changed - no finding of this scan was acted on.';
+
+  if AUnknown > 0 then
+    Result := Result + Format(' %d of the ids you named matched no finding ' +
+      'of this scan ("unknownIds"), so nothing was done for them: already ' +
+      'in order, not something this check fixes, or an id from an older ' +
+      'scan - list again.', [AUnknown]);
 end;
 
 // Both checks answer the same two questions about their own findings, so

@@ -483,6 +483,12 @@ type
     ///  nobody can see and Ctrl+Z cannot reach. Only the quick-fix tools
     ///  cleaned up after themselves; the rule is shared now.</summary>
     [Test] procedure AModuleTheCallOpenedIsNotLeftBehind;
+    /// <summary>Measured live (2.0.4): interface_guids answered "The
+    ///  declarations you named carry a fresh GUID now" after an apply whose
+    ///  only id matched nothing at all - a static note asserting success,
+    ///  which is the lie 1.25.1 found in the line-ending tool. The sentence
+    ///  is DERIVED from the outcomes now, in one shared place.</summary>
+    [Test] procedure AnApplyNoteSaysWhatReallyHappened;
   end;
 
   /// <summary>A forum screenshot (2026-10-02) showed the Extract Method
@@ -3892,6 +3898,44 @@ begin
   Assert.IsFalse(ParseFixId('nothex00-1-2', H, Gen, Idx), 'no hash');
   Assert.IsFalse(ParseFixId('0000002A-1-x', H, Gen, Idx), 'no index');
   Assert.IsFalse(ParseFixId('0000002A--1', H, Gen, Idx), 'a negative generation');
+end;
+
+procedure TSelfProtectionTests.AnApplyNoteSaysWhatReallyHappened;
+const
+  Thing = 'declaration(s)';
+  Done = 'carry a fresh GUID now';
+  Where = 'in the IDE buffer when the file was open (not saved)';
+begin
+  // The measured case: apply=true with one id that matches no finding.
+  // Nothing happened, so the note may not say the opposite.
+  var Nothing := AppliedByIdsNote(0, 0, 1, Thing, Done, Where);
+  Assert.IsTrue(Nothing.StartsWith('NOTHING was changed'),
+    'an apply that matched nothing says so first: ' + Nothing);
+  Assert.IsFalse(Nothing.Contains(Done),
+    'and it does not claim the declarations were done: ' + Nothing);
+  Assert.IsTrue(Nothing.Contains('unknownIds'),
+    'while the id that matched nothing is pointed at: ' + Nothing);
+
+  // The ordinary case: two done, and the counts are the scan BEFORE.
+  var Two := AppliedByIdsNote(2, 0, 0, Thing, Done, Where);
+  Assert.IsTrue(Two.StartsWith('2 declaration(s) carry a fresh GUID now'),
+    'what happened, counted: ' + Two);
+  Assert.IsTrue(Two.Contains('BEFORE'),
+    'and that the rows describe the state before it: ' + Two);
+  Assert.IsFalse(Two.Contains('could NOT'), 'nothing failed: ' + Two);
+
+  // A partial apply names both halves, and an apply in which every named
+  // entry failed is not success with a footnote.
+  var Mixed := AppliedByIdsNote(1, 2, 0, Thing, Done, Where);
+  Assert.IsTrue(Mixed.StartsWith('1 declaration(s)'), 'the one that worked');
+  Assert.IsTrue(Mixed.Contains('2 could NOT be done'),
+    'and the two that did not: ' + Mixed);
+
+  var AllFailed := AppliedByIdsNote(0, 3, 0, Thing, Done, Where);
+  Assert.IsTrue(AllFailed.StartsWith('NOTHING was changed'),
+    'three named, three failed: ' + AllFailed);
+  Assert.IsTrue(AllFailed.Contains('3 declaration(s)'),
+    'and it says how many were named: ' + AllFailed);
 end;
 
 
