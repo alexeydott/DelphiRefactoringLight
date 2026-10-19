@@ -1050,8 +1050,8 @@ const
     '{"name":"find_unit","description":"Which unit(s) declare an identifier - from the plugin''s' +
     ' identifier index over the library, browsing and project paths - and whether the compiler ' +
     'can see each unit (availability). partial=true searches by substring.","inputSchema":{"typ' +
-    'e":"object","properties":{"identifier":{"type":"string"},"partial":{"type":"boolean"},"max' +
-    '":{"type":"integer"},"instance":{"type":"integer","description":"Process id of the IDE to ' +
+    'e":"object","properties":{"identifier":{"type":"string","description":"The identifier to look up."},"partial":{"type":"boolean","description":"Substring search instead of the exact name (default false)."},"max' +
+    '":{"type":"integer","description":"Max rows of a substring search (default 50)."},"instance":{"type":"integer","description":"Process id of the IDE to ' +
     'use. Normally omitted - the IDE is chosen automatically (see ide_instances)."}},"required"' +
     ':["identifier"]}}' +
     ',' +
@@ -1060,12 +1060,12 @@ const
     'and replaces the expression with the name. Refused where hoisting would change behaviour ' +
     '(after a short-circuit and/or, in a loop condition, as the sole statement of a branch, ' +
     'inside a with). apply=false (the default) only shows the change.","inputSchema":{"type":' +
-    '"object","properties":{"file":{"type":"string"},"line":{"type":"integer",' +
+    '"object","properties":{"file":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer",' +
     '"description":"1-based line of the expression."},"expression":{"type":"string",' +
     '"description":"The text to extract; located on that line. Alternative to column + ' +
     'end_column."},"column":{"type":"integer","description":"1-based start column ' +
-    '(with end_column), or where to start looking for \"expression\"."},"end_column":' +
-    '{"type":"integer","description":"1-based, exclusive."},"name":{"type":"string",' +
+    '(with end_column), or where to start looking for \"expression\". Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"end_column":' +
+    '{"type":"integer","description":"1-based, exclusive. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"name":{"type":"string",' +
     '"description":"Name of the new variable. Default: derived from the expression."},' +
     ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
@@ -1074,7 +1074,7 @@ const
     '(\"X := TFoo.Create\" -> X.Free, BeginUpdate -> EndUpdate, Enter/Acquire/Lock -> the ' +
     'counterpart), otherwise a TODO comment is inserted - pass \"cleanup\" to say it ' +
     'yourself. Only wrapper lines are added. apply=false (the default) only shows the ' +
-    'change.","inputSchema":{"type":"object","properties":{"file":{"type":"string"},' +
+    'change.","inputSchema":{"type":"object","properties":{"file":{"type":"string","description":"Absolute path of the unit."},' +
     '"from_line":{"type":"integer","description":"1-based first line."},"to_line":' +
     '{"type":"integer","description":"1-based last line. Default: from_line."},"cleanup":' +
     '{"type":"string","description":"The statement for the finally block, e.g. ' +
@@ -1085,9 +1085,9 @@ const
     'class incl. its method implementations, routine, const, var) into an EXISTING unit and ' +
     'updates the uses clauses of both units and of every unit using the symbol. Use ' +
     'move_to_new_unit when the target does not exist yet. apply=false (the default) reports ' +
-    'the plan.","inputSchema":{"type":"object","properties":{"file":{"type":"string"},' +
+    'the plan.","inputSchema":{"type":"object","properties":{"file":{"type":"string","description":"Absolute path of the unit."},' +
     '"line":{"type":"integer","description":"1-based line of the identifier."},' +
-    '"column":{"type":"integer","description":"1-based column."},"target_file":' +
+    '"column":{"type":"integer","description":"1-based column. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"target_file":' +
     '{"type":"string","description":"The unit to move into (path, or a name next to ' +
     'the source)."},' + ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp + '},"required":' +
     '["file","line","column","target_file"]}}' +
@@ -1098,9 +1098,9 @@ const
     'occurrence the rewriter cannot handle (several targets, unresolved type, inactive ' +
     '{$IFDEF} region) is listed with the reason and left alone. apply=false (the default) ' +
     'shows before/after per statement.","inputSchema":{"type":"object","properties":{' +
-    '"file":{"type":"string"},"line":{"type":"integer","description":"1-based line ' +
+    '"file":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer","description":"1-based line ' +
     'inside the with-statement; without it the whole file is scanned."},"files":{"type":' +
-    '"array","items":{"type":"string"}},"project":{"type":"boolean"},"inline_vars":' +
+    '"array","items":{"type":"string"},"description":"Several units instead of one (absolute paths)."},"project":{"type":"boolean","description":"Every unit of the project instead of one file (default false)."},"inline_vars":' +
     '{"type":"boolean","description":"Introduce inline variables for complex targets ' +
     '(Delphi 10.3+). Default true."},' + ApplyTokenProp + ',' + TokenProp + ',' + InstanceProp +
     '}}}' +
@@ -1114,7 +1114,7 @@ const
     'form unit whose form is NOT loaded in the IDE, textually unused entries are reported ' +
     'as \"unverified\" and kept unless include_unverified is set. apply=false (the ' +
     'default) only shows the change.","inputSchema":{"type":"object","properties":' +
-    '{"file":{"type":"string"},' +
+    '{"file":{"type":"string","description":"Absolute path of the unit."},' +
     '"remove_unused":{"type":"boolean","description":"Default true."},' +
     '"move_to_implementation":{"type":"boolean","description":"Default false."},' +
     '"include_unverified":{"type":"boolean","description":"Default false. Also act on ' +
@@ -1134,8 +1134,8 @@ const
     'DECLARED - DelphiLSP first, then the type of its qualifier, then the identifier index. ' +
     'Answers in cases lsp_definition does not: a private/public overload pair (Delphi 13.1 ' +
     'RSS-5463) or a unit that is not open. Read-only.","inputSchema":{"type":"object",' +
-    '"properties":{"file":{"type":"string"},"line":{"type":"integer","description":' +
-    '"1-based."},"column":{"type":"integer","description":"1-based."},' + InstanceProp +
+    '"properties":{"file":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer","description":' +
+    '"1-based."},"column":{"type":"integer","description":"1-based. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},' + InstanceProp +
     '},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"extract_method","description":"Extracts the lines from_line..to_line ' +
@@ -1144,7 +1144,7 @@ const
     'with DelphiLSP. apply=false (the default) answers with the generated code - the ' +
     'routine, the call that replaces the block and the declaration line - since that is ' +
     'what has to be judged; the write itself is not a line diff.","inputSchema":{"type":' +
-    '"object","properties":{"file":{"type":"string"},"from_line":{"type":"integer",' +
+    '"object","properties":{"file":{"type":"string","description":"Absolute path of the unit."},"from_line":{"type":"integer",' +
     '"description":"1-based first line of the block."},"to_line":{"type":"integer",' +
     '"description":"1-based last line. Default: from_line."},"name":{"type":"string",' +
     '"description":"Name of the new method. Default ExtractedMethod."},' + ApplyFreshProp + ',' +
@@ -1158,13 +1158,13 @@ const
     'that would be written. The answer also says whether the class can implement an ' +
     'interface at all - a TObject descendant provides no IInterface.",' +
     '"inputSchema":{"type":"object","properties":{"file":' +
-    '{"type":"string"},"line":{"type":"integer","description":"1-based line inside ' +
+    '{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer","description":"1-based line inside ' +
     'or at the class declaration."},"interface_name":{"type":"string","description":' +
     '"Name of the interface. Default: the class name with T replaced by I. Required ' +
     'with add_to_existing."},"target_file":{"type":"string","description":"The new ' +
     'unit (path or a name next to the source)."},"members":{"type":"array","items":' +
     '{"type":"string"},"description":"Member names to include. Default: every public ' +
-    'and published method and property."},"add_to_existing":{"type":"boolean"},' +
+    'and published method and property."},"add_to_existing":{"type":"boolean","description":"Add the members to the interface target_file already declares instead of creating a new unit (default false)."},' +
     '"change_base_to":{"type":"string","description":"A base class to derive from ' +
     'instead, applied with the extraction. A class that does not provide IInterface ' +
     'cannot implement the extracted interface at all - the answer field ' +
@@ -1184,7 +1184,7 @@ const
     'AfterConstruction pair that mirrors TInterfacedObject''s initial-refcount trick. ' +
     'Afterwards the instance frees itself when the last interface reference drops. ' +
     'apply=false (the default) returns the code it would add.","inputSchema":{"type":' +
-    '"object","properties":{"file":{"type":"string"},"line":{"type":"integer",' +
+    '"object","properties":{"file":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer",' +
     '"description":"1-based line inside or at the class declaration."},' + ApplyFreshProp +
     ',' + InstanceProp + '},"required":["file","line"]}}' +
     ',' +
@@ -1193,8 +1193,8 @@ const
     'they agree. apply=true aligns the diverging ones with the majority signature ' +
     '(class declarations first, then the implementations, which keep their parameter ' +
     'NAMES because the body uses them).","inputSchema":{"type":"object","properties":' +
-    '{"file":{"type":"string"},"line":{"type":"integer","description":"1-based."},' +
-    '"column":{"type":"integer","description":"1-based."},' + ApplyFreshProp + ',' +
+    '{"file":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer","description":"1-based."},' +
+    '"column":{"type":"integer","description":"1-based. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},' + ApplyFreshProp + ',' +
     InstanceProp + '},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"dfm_events","description":"Checks every form of the project: an event ' +
@@ -1226,8 +1226,8 @@ const
     '{"file":{"type":"string","description":"The unit."},' +
     '"line":{"type":"integer","description":"1-based line of the literal, or of the caret."},' +
     '"literal":{"type":"string","description":"The literal to replace, located on that line as code."},' +
-    '"column":{"type":"integer","description":"1-based column; with end_column instead of literal."},' +
-    '"end_column":{"type":"integer","description":"1-based, end exclusive."},' +
+    '"column":{"type":"integer","description":"1-based column; with end_column instead of literal. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},' +
+    '"end_column":{"type":"integer","description":"1-based, end exclusive. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},' +
     '"value":{"type":"string","description":"What is declared. Defaults to the literal; pass it to declare something else (or from scratch)."},' +
     '"name":{"type":"string","description":"The constant name. Suggested from the value when omitted."},' +
     '"type":{"type":"string","description":"Pascal type; omitted = untyped, which is what a const usually wants."},' +
@@ -1264,8 +1264,8 @@ const
     '{"name":"add_unit","description":"Adds a unit to the uses clause of a file (interface or i' +
     'mplementation), minimal edit, IDE buffer when the file is open. Refuses units only on the ' +
     'browsing path. apply=false (the default) only shows the change.","inputSchema":{"type":"object","properties":{"file":{"type":"string","desc' +
-    'ription":"Absolute path of the unit."},"unit":{"type":"string"},"section":{"type":"string"' +
-    ',"enum":["interface","implementation"]},' + ApplyTokenProp + ',' + TokenProp + ',' +
+    'ription":"Absolute path of the unit."},"unit":{"type":"string","description":"The unit to add, spelled as it should appear in the clause."},"section":{"type":"string"' +
+    ',"enum":["interface","implementation"],"description":"interface (default) or implementation."},' + ApplyTokenProp + ',' + TokenProp + ',' +
     '"instance":{"type":"integer","description":"Proces' +
     's id of the IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instan' +
     'ces)."}},"required":["file","unit"]}}' +
@@ -1273,7 +1273,7 @@ const
     '{"name":"remove_unit","description":"Removes a unit from the uses clause of a file. apply=' +
     'false (the default) only shows the change.","inpu' +
     'tSchema":{"type":"object","properties":{"file":{"type":"string","description":"Absolute pa' +
-    'th of the unit."},"unit":{"type":"string"},' + ApplyTokenProp + ',' + TokenProp + ',' +
+    'th of the unit."},"unit":{"type":"string","description":"The unit to remove from the clause."},' + ApplyTokenProp + ',' + TokenProp + ',' +
     '"instance":{"type":"integer","description":"Pro' +
     'cess id of the IDE to use. Normally omitted - the IDE is chosen automatically (see ide_ins' +
     'tances)."}},"required":["file","unit"]}}' +
@@ -1293,7 +1293,7 @@ const
     'cope files on disk.","inputSchema":{"type":"object","properties":{"file":{"type":"string",' +
     '"description":"Absolute path of the unit."},"line":{"type":"integer","description":"1-base' +
     'd line."},"column":{"type":"integer","description":"1-based column (anywhere on the identi' +
-    'fier)."},"instance":{"type":"integer","description":"Process id of the IDE to use. Normall' +
+    'fier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"instance":{"type":"integer","description":"Process id of the IDE to use. Normall' +
     'y omitted - the IDE is chosen automatically (see ide_instances)."}},"required":["file","li' +
     'ne","column"]}}' +
     ',' +
@@ -1302,22 +1302,22 @@ const
     'fied through DelphiLSP GotoDefinition.","inputSchema":{"type":"object","properties":{"file' +
     '":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer","d' +
     'escription":"1-based line."},"column":{"type":"integer","description":"1-based column (any' +
-    'where on the identifier)."},"instance":{"type":"integer","description":"Process id of the ' +
+    'where on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"instance":{"type":"integer","description":"Process id of the ' +
     'IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instances)."}},"re' +
     'quired":["file","line","column"]}}' +
     ',' +
     '{"name":"uses_path","description":"Shortest chain of uses entries from one project unit to' +
     ' another - the answer to \"F2047 circular unit reference\": which chain would the new uses' +
-    ' entry close.","inputSchema":{"type":"object","properties":{"from_unit":{"type":"string"},' +
-    '"to_unit":{"type":"string"},"interface_only":{"type":"boolean","description":"Only interfa' +
+    ' entry close.","inputSchema":{"type":"object","properties":{"from_unit":{"type":"string","description":"Unit name the path starts at."},' +
+    '"to_unit":{"type":"string","description":"Unit name the path leads to."},"interface_only":{"type":"boolean","description":"Only interfa' +
     'ce-section uses (default true)."},"instance":{"type":"integer","description":"Process id o' +
     'f the IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instances)."' +
     '}},"required":["from_unit","to_unit"]}}' +
     ',' +
     '{"name":"uses_cycles","description":"Circular unit references of the active project (all c' +
     'ycles, or only those through one unit) plus the uses entries whose removal breaks the most' +
-    ' cycles.","inputSchema":{"type":"object","properties":{"unit":{"type":"string"},"max":{"ty' +
-    'pe":"integer"},"instance":{"type":"integer","description":"Process id of the IDE to use. N' +
+    ' cycles.","inputSchema":{"type":"object","properties":{"unit":{"type":"string","description":"Only cycles running THROUGH this unit, which must be one of the project (an unknown name is an error). Without it, every cycle."},"max":{"ty' +
+    'pe":"integer","description":"Max cycles in the answer (default 50)."},"instance":{"type":"integer","description":"Process id of the IDE to use. N' +
     'ormally omitted - the IDE is chosen automatically (see ide_instances)."}}}}' +
     ',' +
     '{"name":"safe_delete","description":"Safe delete of the symbol at a position (method, rou' +
@@ -1329,7 +1329,7 @@ const
     't saved) when the check allows it.","inputSchema":{"type":"object","properties":{"file":{"' +
     'type":"string","description":"Absolute path of the unit."},"line":{"type":"integer","descr' +
     'iption":"1-based line of the identifier (a use or the declaration)."},"column":{"type":"in' +
-    'teger","description":"1-based column."},"apply":{"type":"boolean","description":"Delete it' +
+    'teger","description":"1-based column. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"apply":{"type":"boolean","description":"Delete it' +
     ' when deletable (default false). There is no token: apply compares the unit with the content this call analysed and refuses when it changed."},"instance":{"type":"integer","description":"Process id ' +
     'of the IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instances).' +
     '"}},"required":["file","line","column"]}}' +
@@ -1347,7 +1347,7 @@ const
     'rites it (open units in the IDE buffer, not saved; closed units on disk).","inputSchema":{' +
     '"type":"object","properties":{"file":{"type":"string","description":"Absolute path of the ' +
     'unit."},"line":{"type":"integer","description":"1-based line of the method name (a call or' +
-    ' the declaration)."},"column":{"type":"integer","description":"1-based column."},"params":' +
+    ' the declaration)."},"column":{"type":"integer","description":"1-based column. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"params":' +
     '{"type":"array","description":"The NEW parameter list in order. Each item: name, type, mod' +
     'ifier (const/var/out/constref), default, from (the OLD parameter it replaces - omit for a ' +
     'new parameter; an old parameter keeps type/modifier/default unless given), value (new para' +
@@ -1369,11 +1369,11 @@ const
     'el alone (an overload, a virtual / override / abstract / message member, a published one) ' +
     'is refused with the reason. Without members/target_class it only reports the class, its me' +
     'mbers with movability and the occurrences. A parameter list is changed by change_signature' +
-    ', which verifies and rewrites every call.","inputSchema":{"type":"object","properties":{"f' +
+    ', which verifies and rewrites every call. It edits the ROUTINES a class declares - procedure, function, constructor, destructor. A field or a property is never listed and never moves, so a method that uses one leaves it behind; the answer names what stays.","inputSchema":{"type":"object","properties":{"f' +
     'ile":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"integer"' +
     ',"description":"1-based line inside the class, or on one of its members or method bodies."' +
     '},"column":{"type":"integer","description":"1-based column (optional; it only preselects t' +
-    'he member at that position)."},"members":{"type":"array","items":{"type":"string"},"descri' +
+    'he member at that position). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"members":{"type":"array","items":{"type":"string"},"descri' +
     'ption":"Names of the members to edit."},"target_class":{"type":"string","description":"The' +
     ' class the members move into. Omit to leave them where they are."},"target_unit":{"type":"' +
     'string","description":"Unit name or path of target_class when it is not in this unit."},"s' +
@@ -1420,7 +1420,7 @@ const
     'what would move, without creating the unit.","inputSchema":{"type":"object","properties":{"file":{"t' +
     'ype":"string","description":"Absolute path of the unit."},"line":{"type":"integer","descri' +
     'ption":"1-based line of the identifier."},"column":{"type":"integer","description":"1-base' +
-    'd column."},"new_unit":{"type":"string","description":"Name of the new unit (e.g. \"Custom' +
+    'd column. Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"new_unit":{"type":"string","description":"Name of the new unit (e.g. \"Custom' +
     'er.List\") or a full path."},' + ApplyTokenProp + ',' + TokenProp + ',' +
     '"instance":{"type":"integer","description":"Process id of the' +
     ' IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instances)."}},"r' +
@@ -1433,8 +1433,8 @@ const
     'es ON DISK - revert with version control. Pass file, files, directory (recursive, .pas/.dp' +
     'r/.dpk) or project=true. apply=false (the default) only reports what would be expanded.","' +
     'inputSchema":{"type":"object","properties":{"file":{"type":"st' +
-    'ring"},"files":{"type":"array","items":{"type":"string"}},"directory":{"type":"string"},"p' +
-    'roject":{"type":"boolean"},' + ApplyFreshProp + ',' +
+    'ring","description":"Absolute path of the unit."},"files":{"type":"array","items":{"type":"string"},"description":"Several units (absolute paths)."},"directory":{"type":"string","description":"Every .pas, .dpr and .dpk below this directory, recursively."},"p' +
+    'roject":{"type":"boolean","description":"Every unit of the project (default false). Pass exactly one of file, files, directory or project."},' + ApplyFreshProp + ',' +
     '"instance":{"type":"integer","description":"Process id of the I' +
     'DE to use. Normally omitted - the IDE is chosen automatically (see ide_instances)."}}}}' +
     ',' +
@@ -1445,9 +1445,9 @@ const
     ' / FX := Value), which are then removed; refused when used elsewhere, virtual/override/ove' +
     'rload. Every property gets a row with the result or the reason. apply=true changes the IDE' +
     ' buffer (not saved).","inputSchema":{"type":"object","properties":{"file":{"type":"string' +
-    '"},"from_line":{"type":"integer","description":"1-based."},"to_line":{"type":"integer"},"d' +
-    'irection":{"type":"string","enum":["to_accessors","to_fields"]},"getter":{"type":"boolean"' +
-    '},"setter":{"type":"boolean"},"apply":{"type":"boolean","description":"Default false: nothing is written and the answer shows the plan. true makes the change. There is no token: apply re-runs the plan on the file as it is now, in the same call."},"instance":{"type":"integer","des' +
+    '","description":"Absolute path of the unit."},"from_line":{"type":"integer","description":"1-based."},"to_line":{"type":"integer","description":"Last line of the range (default: from_line)."},"d' +
+    'irection":{"type":"string","enum":["to_accessors","to_fields"],"description":"to_accessors (default) or to_fields."},"getter":{"type":"boolean"' +
+    ',"description":"Create a getter (default true)."},"setter":{"type":"boolean","description":"Create a setter (default true)."},"apply":{"type":"boolean","description":"Default false: nothing is written and the answer shows the plan. true makes the change. There is no token: apply re-runs the plan on the file as it is now, in the same call."},"instance":{"type":"integer","des' +
     'cription":"Process id of the IDE to use. Normally omitted - the IDE is chosen automaticall' +
     'y (see ide_instances)."}},"required":["file","from_line"]}}' +
     ',' +
@@ -1462,7 +1462,7 @@ const
     '{"name":"blame","description":"git/svn blame of a file (revision, author, date, summary pe' +
     'r line) - the file on disk; at most 500 lines per call.","inputSchema":{"type":"object","p' +
     'roperties":{"file":{"type":"string","description":"Absolute path of the unit."},"start_lin' +
-    'e":{"type":"integer"},"end_line":{"type":"integer"},"instance":{"type":"integer","descript' +
+    'e":{"type":"integer","description":"First line (default 1)."},"end_line":{"type":"integer","description":"Last line; 0, the default, means to the end of the file. At most 500 lines come back per call."},"instance":{"type":"integer","descript' +
     'ion":"Process id of the IDE to use. Normally omitted - the IDE is chosen automatically (se' +
     'e ide_instances)."}},"required":["file"]}}' +
     ',' +
@@ -1470,7 +1470,7 @@ const
     'e, changed files; diff_file adds the diff of the files whose path contains that text.","in' +
     'putSchema":{"type":"object","properties":{"file":{"type":"string","description":"Absolute ' +
     'path of the unit."},"line":{"type":"integer","description":"1-based line."},"diff_file":{"' +
-    'type":"string"},"instance":{"type":"integer","description":"Process id of the IDE to use. ' +
+    'type":"string","description":"Also return the diff of the changed file whose path CONTAINS this text. Without it the answer lists the files of the commit and no diff."},"instance":{"type":"integer","description":"Process id of the IDE to use. ' +
     'Normally omitted - the IDE is chosen automatically (see ide_instances)."}},"required":["fi' +
     'le","line"]}}' +
     ',' +
@@ -1480,77 +1480,77 @@ const
     's the changes and a token for rename_apply.","inputSchema":{"type":"object","properties":{' +
     '"file":{"type":"string","description":"Absolute path of the unit."},"line":{"type":"intege' +
     'r","description":"1-based line."},"column":{"type":"integer","description":"1-based column' +
-    ' (anywhere on the identifier)."},"new_name":{"type":"string"},"scope":{"type":"string","en' +
-    'um":["project","unit","method"]},"include_open_units":{"type":"boolean"},"include_used_uni' +
-    'ts":{"type":"boolean"},"instance":{"type":"integer","description":"Process id of the IDE t' +
+    ' (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"new_name":{"type":"string","description":"The new name."},"scope":{"type":"string","en' +
+    'um":["project","unit","method"],"description":"How far the scan reaches: project (the default), unit or method. Anything else is read as project."},"include_open_units":{"type":"boolean","description":"Besides the project files, the units open in the editor (default: the setting on the options page)."},"include_used_uni' +
+    'ts":{"type":"boolean","description":"Besides the project files, the units reachable through uses clauses (default: the setting on the options page)."},"instance":{"type":"integer","description":"Process id of the IDE t' +
     'o use. Normally omitted - the IDE is chosen automatically (see ide_instances)."}},"require' +
     'd":["file","line","column","new_name"]}}' +
     ',' +
     '{"name":"rename_apply","description":"Applies the rename previewed by rename_preview (toke' +
     'n) through the IDE editor - undoable, not saved.","inputSchema":{"type":"object","properti' +
-    'es":{"token":{"type":"string"},"instance":{"type":"integer","description":"Process id of t' +
+    'es":{"token":{"type":"string","description":"The token of the rename_preview this call applies."},"instance":{"type":"integer","description":"Process id of t' +
     'he IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instances)."}},' +
     '"required":["token"]}}' +
     ',' +
     '{"name":"lsp_hover","description":"DelphiLSP hover text at a position (type / declaration ' +
-    'info).","inputSchema":{"type":"object","properties":{"file":{"type":"string","description"' +
+    'info). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","description"' +
     ':"Absolute path of the unit."},"line":{"type":"integer","description":"1-based line."},"co' +
-    'lumn":{"type":"integer","description":"1-based column (anywhere on the identifier)."},"ins' +
+    'lumn":{"type":"integer","description":"1-based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"ins' +
     'tance":{"type":"integer","description":"Process id of the IDE to use. Normally omitted - t' +
     'he IDE is chosen automatically (see ide_instances)."}},"required":["file","line","column"]' +
     '}}' +
     ',' +
-    '{"name":"lsp_definition","description":"DelphiLSP go-to-definition for a position.","input' +
+    '{"name":"lsp_definition","description":"DelphiLSP go-to-definition for a position. The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","input' +
     'Schema":{"type":"object","properties":{"file":{"type":"string","description":"Absolute pat' +
     'h of the unit."},"line":{"type":"integer","description":"1-based line."},"column":{"type":' +
-    '"integer","description":"1-based column (anywhere on the identifier)."},"instance":{"type"' +
+    '"integer","description":"1-based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"instance":{"type"' +
     ':"integer","description":"Process id of the IDE to use. Normally omitted - the IDE is chos' +
     'en automatically (see ide_instances)."}},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"lsp_implementation","description":"DelphiLSP go-to-implementation for a position.' +
-    '","inputSchema":{"type":"object","properties":{"file":{"type":"string","description":"Abso' +
+    ' The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","description":"Abso' +
     'lute path of the unit."},"line":{"type":"integer","description":"1-based line."},"column":' +
-    '{"type":"integer","description":"1-based column (anywhere on the identifier)."},"instance"' +
+    '{"type":"integer","description":"1-based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"instance"' +
     ':{"type":"integer","description":"Process id of the IDE to use. Normally omitted - the IDE' +
     ' is chosen automatically (see ide_instances)."}},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"lsp_references","description":"DelphiLSP textDocument/references for a position (' +
-    'when the server supports it).","inputSchema":{"type":"object","properties":{"file":{"type"' +
+    'when the server supports it). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type"' +
     ':"string","description":"Absolute path of the unit."},"line":{"type":"integer","descriptio' +
     'n":"1-based line."},"column":{"type":"integer","description":"1-based column (anywhere on ' +
-    'the identifier)."},"include_declaration":{"type":"boolean"},"instance":{"type":"integer","' +
+    'the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"include_declaration":{"type":"boolean","description":"Include the declaration itself (default true)."},"instance":{"type":"integer","' +
     'description":"Process id of the IDE to use. Normally omitted - the IDE is chosen automatic' +
     'ally (see ide_instances)."}},"required":["file","line","column"]}}' +
     ',' +
     '{"name":"lsp_document_symbols","description":"DelphiLSP document symbols of a unit (raw LS' +
-    'P JSON, 0-based ranges).","inputSchema":{"type":"object","properties":{"file":{"type":"str' +
+    'P JSON, 0-based ranges). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"str' +
     'ing","description":"Absolute path of the unit."},"instance":{"type":"integer","description' +
     '":"Process id of the IDE to use. Normally omitted - the IDE is chosen automatically (see i' +
     'de_instances)."}},"required":["file"]}}' +
     ',' +
     '{"name":"lsp_signature_help","description":"DelphiLSP signature help inside a call (raw LS' +
-    'P JSON).","inputSchema":{"type":"object","properties":{"file":{"type":"string","descriptio' +
+    'P JSON). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","properties":{"file":{"type":"string","descriptio' +
     'n":"Absolute path of the unit."},"line":{"type":"integer","description":"1-based line."},"' +
-    'column":{"type":"integer","description":"1-based column (anywhere on the identifier)."},"i' +
+    'column":{"type":"integer","description":"1-based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"i' +
     'nstance":{"type":"integer","description":"Process id of the IDE to use. Normally omitted -' +
     ' the IDE is chosen automatically (see ide_instances)."}},"required":["file","line","column' +
     '"]}}' +
     ',' +
     '{"name":"lsp_completion","description":"DelphiLSP completion items at a position (label, d' +
-    'etail, kind); prefix filters, max limits (default 100).","inputSchema":{"type":"object","p' +
+    'etail, kind); prefix filters, max limits (default 100). The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"type":"object","p' +
     'roperties":{"file":{"type":"string","description":"Absolute path of the unit."},"line":{"t' +
     'ype":"integer","description":"1-based line."},"column":{"type":"integer","description":"1-' +
-    'based column (anywhere on the identifier)."},"prefix":{"type":"string"},"max":{"type":"int' +
-    'eger"},"instance":{"type":"integer","description":"Process id of the IDE to use. Normally ' +
+    'based column (anywhere on the identifier). Characters of the line as stored - a tab counts as ONE, not as its width on screen."},"prefix":{"type":"string","description":"Only items whose label starts with this (case-insensitive)."},"max":{"type":"int' +
+    'eger","description":"Max items (default 100)."},"instance":{"type":"integer","description":"Process id of the IDE to use. Normally ' +
     'omitted - the IDE is chosen automatically (see ide_instances)."}},"required":["file","line' +
     '","column"]}}' +
     ',' +
     '{"name":"lsp_request","description":"Sends any request to the plugin''s DelphiLSP session a' +
     'nd returns the raw result (LSP conventions: 0-based positions, file URIs). \"file\" syncs ' +
-    'that document first. Lifecycle and document-sync methods are refused.","inputSchema":{"typ' +
-    'e":"object","properties":{"method":{"type":"string"},"params":{"type":"object"},"file":{"t' +
+    'that document first. Lifecycle and document-sync methods are refused. The unit need not be OPEN in the IDE: this reads it (editor buffer first, else disk), sends that text to the session and waits for its analysis before asking. What it cannot do is make DelphiLSP resolve a unit its own compile does not reach - the answer is empty then, and find_original_symbol is the fallback that asks the identifier index.","inputSchema":{"typ' +
+    'e":"object","properties":{"method":{"type":"string","description":"The LSP method, e.g. textDocument/documentHighlight. Lifecycle, did* and $/ methods are refused."},"params":{"type":"object","description":"The params of the request as JSON - sent as they are."},"file":{"t' +
     'ype":"string","description":"Optional: sync this file''s current content before the request' +
-    '."},"timeout_ms":{"type":"integer"},"instance":{"type":"integer","description":"Process id' +
+    '."},"timeout_ms":{"type":"integer","description":"How long to wait for the answer (default 20000)."},"instance":{"type":"integer","description":"Process id' +
     ' of the IDE to use. Normally omitted - the IDE is chosen automatically (see ide_instances)' +
     '."}},"required":["method"]}}' +
     ']';

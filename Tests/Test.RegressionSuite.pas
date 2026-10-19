@@ -163,6 +163,11 @@ type
     ///  protected against changes at all. It cannot be told from the
     ///  outside, so each tool has to say it.</summary>
     [Test] procedure EveryWritingToolSaysWhatProtectsItsApply;
+    /// <summary>Same review: six parameters had no description at all, so
+    ///  their meaning and their default could only be found by trying. The
+    ///  sweep found 46 of them - including the apply of convert_properties,
+    ///  which is why this rule is a test and not a round of fixes.</summary>
+    [Test] procedure EveryToolParameterIsDescribed;
   end;
 
   /// <summary>Issue #13: while DelphiLSP loads a big project (12-30 s) its
@@ -1638,6 +1643,58 @@ begin
   Assert.IsTrue(During > Before, Format('a running pipe handler must be ' +
     'counted by the worker latch (workers before: %d, while it ran: %d)',
     [Before, During]));
+end;
+
+procedure TMcpPipeRegressionTests.EveryToolParameterIsDescribed;
+var
+  Props: Integer;
+  Bad: string;
+
+  procedure Note(const AWhat: string);
+  begin
+    if Bad <> '' then Bad := Bad + '; ';
+    Bad := Bad + AWhat;
+  end;
+
+begin
+  Props := 0;
+  Bad := '';
+  var Arr := McpToolDefinitions;
+  try
+    Assert.IsTrue((Arr <> nil) and (Arr.Count > 40), 'the shipped list');
+    for var V in Arr do
+    begin
+      var Tool := V as TJSONObject;
+      var Name := Tool.GetValue<string>('name', '');
+      var Schema := Tool.GetValue<TJSONObject>('inputSchema', nil);
+      if Schema = nil then Continue;
+      var PropsObj := Schema.GetValue<TJSONObject>('properties', nil);
+      if PropsObj = nil then Continue;
+      for var Pair in PropsObj do
+      begin
+        Inc(Props);
+        var Body := Pair.JsonValue as TJSONObject;
+        var Desc := Body.GetValue<string>('description', '');
+        if Trim(Desc) = '' then
+        begin
+          Note(Name + '.' + Pair.JsonString.Value + ' has no description');
+          Continue;
+        end;
+        // "1-based column" does not say HOW it counts - the question a
+        // reviewer asked, and the answer belongs where it is asked.
+        if SameText(Pair.JsonString.Value, 'column') or
+           SameText(Pair.JsonString.Value, 'end_column') then
+          if not Desc.ToLower.Contains('tab') then
+            Note(Name + '.' + Pair.JsonString.Value +
+              ' does not say how it counts a tab');
+      end;
+    end;
+  finally
+    Arr.Free;
+  end;
+
+  Assert.AreEqual('', Bad, Bad);
+  Assert.IsTrue(Props > 200, 'every parameter of every tool was looked at');
 end;
 
 procedure TMcpPipeRegressionTests.EveryWritingToolSaysWhatProtectsItsApply;

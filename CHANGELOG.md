@@ -6,7 +6,7 @@ development builds and were never released.
 
 ---
 
-## 2.0.2 - 2026-10-19
+## 2.0.3 - 2026-10-19
 
 A reviewing model was given the MCP server with nothing but the tool list and
 asked whether it could use the tools from the descriptions alone. It could,
@@ -45,6 +45,36 @@ token it has no parameter for, or that says "no token" without naming what it
 does instead. That sweep found five more writing tools the report could not
 see, because their `apply` text was written per tool instead of shared -
 among them `convert_properties`, whose `apply` had no description at all.
+
+### Every parameter says what it is
+
+Six parameters were named in the review as undocumented; the sweep that
+checks it found **46** of 219 - among them the `apply` of
+`convert_properties`, which had no description at all. All of them carry one
+now, written from the handler with the default it really uses: `find_unit`
+`partial`/`max`, `rename_preview` `scope` (project, unit or method - there
+is no "selected"), `include_open_units`/`include_used_units`,
+`convert_properties` `direction`/`getter`/`setter`/`to_line`, `uses_cycles`
+`unit`/`max`, `blame` `start_line`/`end_line`, `commit_info` `diff_file`,
+`lsp_references` `include_declaration`, `lsp_completion` `prefix`/`max`,
+`lsp_request` `method`/`params`/`timeout_ms`, and the rest.
+
+### Three answers the descriptions did not give
+
+- **How a column counts**: "1-based" does not say what happens to a tab or
+  to a character outside ASCII. Every `column` and `end_column` says it now:
+  characters of the line as stored, a tab counts as ONE, not as its width on
+  screen.
+- **Whether `lsp_*` needs an open unit**: it does not. Each of the eight
+  tools says that it reads the file (editor buffer first, else disk), sends
+  that text to the session and waits for its analysis - and that it cannot
+  make DelphiLSP resolve a unit its own compile does not reach, where
+  `find_original_symbol` is the fallback that asks the identifier index.
+- **What `edit_method` moves**: the routines a class declares. A field or a
+  property is never listed and never moves, so a method that uses one leaves
+  it behind - which the answer already named, without the description ever
+  saying so. (The record comment in the source claimed "property / field"
+  too; it was wrong and is corrected.)
 
 ### An id that matches nothing is said out loud
 

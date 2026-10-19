@@ -38,8 +38,11 @@ type
   TClassMemberInfo = record
     Name: string;
     DeclLine: Integer;      // 0-based
-    Kind: string;           // procedure / function / constructor / destructor /
-                            // property / field
+    Kind: string;           // procedure / function / constructor /
+                            // destructor - ONLY routines: ClassMembersOf
+                            // collects what IsHeaderLine answers for, so a
+                            // field or a property is never listed (asked by
+                            // a reviewing model, 2026-10-19)
     Directives: string;     // what follows the first ';' of the declaration
     Movable: Boolean;
     Why: string;            // why not, when Movable is False
