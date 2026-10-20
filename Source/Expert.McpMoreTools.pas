@@ -1404,6 +1404,47 @@ begin
   // A real project easily yields 100+ rows of the same kind (stray DCUs
   // of a whole library output dir) - summarise by kind, then list at most
   // "max" rows so the answer stays readable.
+  // ---- the one thing this check can FIX -----------------------------------
+  // A .dcu in the LSP's own DCU output is read instead of the source, and
+  // then DelphiLSP has no source position for that unit's symbols
+  // (measured). Moving it aside is reversible and cheap, so the check
+  // offers it - for the ids you name, like every other check here.
+  var WantIds: TArray<string> := nil;
+  var IdArr := AArgs.GetValue<TJSONArray>('fix_ids', nil);
+  if IdArr <> nil then
+    for var V in IdArr do WantIds := WantIds + [UpperCase(Trim(V.Value))];
+  var DoApply := ArgBool(AArgs, 'apply');
+  if DoApply and (Length(WantIds) = 0) then
+    Exit(McpErr('apply needs "fix_ids" - list the findings first and name ' +
+      'the ones to act on. Only "LSP reads a DCU" findings can be fixed ' +
+      'here: their .dcu is MOVED into a subdirectory of its own folder, ' +
+      'never deleted.'));
+  var Moved := TDictionary<string, string>.Create;
+  var AsideDir := '';
+  try
+    if DoApply then
+      for var I in Issues do
+      begin
+        var Id := UpperCase(DebugIssueId(I));
+        var Wanted := False;
+        for var W in WantIds do
+          if W = Id then Wanted := True;
+        if not Wanted then Continue;
+        if I.Kind <> dkLspDcu then
+        begin
+          Moved.AddOrSetValue(Id, 'NOT fixed: a "' +
+            DebugIssueKindName(I.Kind) + '" finding has no fix here');
+          Continue;
+        end;
+        if AsideDir = '' then
+          AsideDir := DcuAsideFolder(ExtractFileDir(I.FileName));
+        var Target, MErr: string;
+        if MoveDcuAside(I.FileName, AsideDir, Target, MErr) then
+          Moved.AddOrSetValue(Id, 'moved to ' + Target)
+        else
+          Moved.AddOrSetValue(Id, 'NOT moved: ' + MErr);
+      end;
+
   var MaxRows := ArgInt(AArgs, 'max', 60);
   if MaxRows <= 0 then MaxRows := MaxInt;
   var Counts := TDictionary<string, Integer>.Create;
@@ -1437,6 +1478,11 @@ begin
     if I.Line > 0 then O.AddPair('line', TJSONNumber.Create(I.Line));
     O.AddPair('reason', I.Reason);
     if I.Hint <> '' then O.AddPair('hint', I.Hint);
+    O.AddPair('id', DebugIssueId(I));
+    if I.Fixable then O.AddPair('fixable', TJSONBool.Create(True));
+    var Outcome: string;
+    if Moved.TryGetValue(UpperCase(DebugIssueId(I)), Outcome) then
+      O.AddPair('result', Outcome);
     Arr.Add(O);
   end;
   var Res := TJSONObject.Create;
@@ -1445,10 +1491,39 @@ begin
   Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
   Res.AddPair('by_kind', Summary);
   Res.AddPair('issues', Arr);
-  if Arr.Count < Length(Issues) then
-    Res.AddPair('note', Format('%d of %d issues listed (problems first) - pass ' +
-      '"max" (0 = all) for more', [Arr.Count, Length(Issues)]));
+  if DoApply then
+  begin
+    var Done := 0;
+    var Failed := 0;
+    for var V in Moved.Values do
+      if V.StartsWith('NOT ') then Inc(Failed) else Inc(Done);
+    Res.AddPair('moved', TJSONNumber.Create(Done));
+    if Failed > 0 then Res.AddPair('notMoved', TJSONNumber.Create(Failed));
+    var AllIds: TArray<string> := nil;
+    for var I in Issues do AllIds := AllIds + [DebugIssueId(I)];
+    var Unknown := UnknownReportIds(AllIds, WantIds);
+    if Length(Unknown) > 0 then
+      Res.AddPair('unknownIds', string.Join(', ', Unknown) +
+        ' - no finding of this scan carries that id (fixed already, or an ' +
+        'id from an older scan - list again)');
+    Res.AddPair('note', AppliedByIdsNote(Done, Failed, Length(Unknown),
+      '.dcu file(s)', 'were moved aside', 'into ' + AsideDir) +
+      ' The LSP session does not notice by itself: lsp_restart makes the ' +
+      'next request start a session that reads the sources.');
+  end
+  else if Arr.Count < Length(Issues) then
+    Res.AddPair('note', Format('%d of %d issues listed (problems first) - ' +
+      'pass "max" (0 = all) for more. A "LSP reads a DCU" finding can be ' +
+      'fixed from here: apply=true with its id moves the .dcu aside.',
+      [Arr.Count, Length(Issues)]))
+  else
+    Res.AddPair('note', 'A "LSP reads a DCU" finding can be fixed from ' +
+      'here: apply=true with its id moves the .dcu into a subdirectory, ' +
+      'so DelphiLSP reads the source again (lsp_restart afterwards).');
   Result := McpOk(Res);
+  finally
+    Moved.Free;
+  end;
 end;
 
 // ---------------------------------------------------------------------------

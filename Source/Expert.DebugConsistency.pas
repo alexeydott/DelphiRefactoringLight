@@ -37,7 +37,7 @@ type
   TDebugIssueSeverity = (dsInfo, dsWarning, dsProblem);
   TDebugIssueKind = (dkDuplicateSource, dkStrayDcu, dkDcuOnly, dkLineEndings,
     dkDebugOption, dkSourceDirective, dkExecutable, dkSymbolFile,
-    dkHostApplication, dkDuplicateBinary);
+    dkHostApplication, dkDuplicateBinary, dkLspDcu);
 
   TDebugIssue = record
     Kind: TDebugIssueKind;
@@ -64,6 +64,10 @@ type
     ///  shipped RTL/VCL - it has platform copies by design).</summary>
     IgnoreDirs: TArray<string>;
     DcuOutputDir: string;              // '' = next to each source
+    /// <summary>The project''s .delphilsp.json, '' when there is
+    ///  none. Its DCU output is what DelphiLSP reads INSTEAD of the
+    ///  sources when .dcu files lie there.</summary>
+    LspConfigFile: string;
     TargetFile: string;                // exe / dll / bpl the build produces
     HostApplication: string;           // run parameters, '' = the target
     ConfigName: string;
@@ -82,6 +86,40 @@ type
 /// <summary>Runs all checks. AProgress may be nil.</summary>
 function RunDebugConsistencyCheck(const AInput: TDebugCheckInput;
   const AProgress: TDebugProgress): TArray<TDebugIssue>;
+
+/// <summary>The DCU output directory a .delphilsp.json asks the compiler
+///  for: the -NU option of its "dccOptions", unquoted and relative to the
+///  project as the compiler reads it. '' when there is none.</summary>
+function DcuOutputFromDccOptions(const AOptions: string): string;
+
+/// <summary>The DCU output directory of the LSP configuration, resolved
+///  against AProjectDir. '' when the file cannot be read or names
+///  none.</summary>
+function LspDcuDirOfConfig(const AConfigFile, AProjectDir: string): string;
+
+/// <summary>The .dcu files in ADir that belong to one of ASources (same
+///  base name). Those are the ones DelphiLSP can take instead of the
+///  source - and then it has no source position for their symbols.
+///  </summary>
+function ShadowingDcuFiles(const ADir: string;
+  const ASources: TArray<string>): TArray<string>;
+
+/// <summary>Moves one .dcu into a subdirectory of its own directory, so
+///  the compiler no longer finds it and the file is still there. The
+///  subdirectory is created when needed; the name is kept, so a second run
+///  into the same folder would overwrite - it is one folder per run.
+///  </summary>
+function MoveDcuAside(const AFile, AAsideDir: string;
+  out ATarget, AError: string): Boolean;
+
+/// <summary>The folder name one "move aside" run uses, stamped so two runs
+///  never mix.</summary>
+function DcuAsideFolder(const ADcuDir: string): string;
+
+/// <summary>An id for one finding: its kind and its file, so an apply can
+///  name a finding instead of an index (the rule every check here
+///  follows).</summary>
+function DebugIssueId(const AIssue: TDebugIssue): string;
 
 /// <summary>Counts line breaks in raw file bytes (UTF-16 BOMs handled).</summary>
 procedure CountLineEndings(const ABytes: TBytes; out ACrLf, ALfOnly, ACrOnly: Integer);
@@ -309,6 +347,153 @@ end;
 // ---------------------------------------------------------------------------
 //  line endings
 // ---------------------------------------------------------------------------
+
+function DcuOutputFromDccOptions(const AOptions: string): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  I := 1;
+  // The options are ONE command line: -NU<dir>, the directory possibly
+  // quoted, possibly relative. Everything else is skipped by hand rather
+  // than split, because a quoted path may contain spaces.
+  while I < Length(AOptions) - 2 do
+  begin
+    if (AOptions[I] = '-') and (AOptions[I + 1] = 'N') and
+       (AOptions[I + 2] = 'U') then
+    begin
+      var J := I + 3;
+      while (J <= Length(AOptions)) and (AOptions[J] = ' ') do Inc(J);
+      if (J <= Length(AOptions)) and (AOptions[J] = '"') then
+      begin
+        Inc(J);
+        var K := J;
+        while (K <= Length(AOptions)) and (AOptions[K] <> '"') do Inc(K);
+        Exit(Copy(AOptions, J, K - J));
+      end;
+      var K := J;
+      while (K <= Length(AOptions)) and (AOptions[K] > ' ') do Inc(K);
+      Exit(Copy(AOptions, J, K - J));
+    end;
+    Inc(I);
+  end;
+end;
+
+function LspDcuDirOfConfig(const AConfigFile, AProjectDir: string): string;
+var
+  Text, Opts: string;
+begin
+  Result := '';
+  if (AConfigFile = '') or not TFile.Exists(AConfigFile) then Exit;
+  try
+    Text := TDelphiFileEncoding.ReadAll(AConfigFile);
+  except
+    Exit;
+  end;
+  // Deliberately NOT a JSON parse: the file is written by the IDE, the one
+  // value we need is a command line inside one string, and a parser would
+  // bring its own failure modes for a diagnostic that must never throw.
+  var P := Pos('"dccOptions"', Text);
+  if P = 0 then Exit;
+  P := PosEx('"', Text, P + Length('"dccOptions"') + 1);
+  if P = 0 then Exit;
+  var Q := PosEx('"', Text, P + 1);
+  while (Q > 1) and (Text[Q - 1] = '\') do Q := PosEx('"', Text, Q + 1);
+  if Q = 0 then Exit;
+  Opts := Copy(Text, P + 1, Q - P - 1);
+  // JSON escapes: only the backslash matters for a path.
+  Opts := StringReplace(Opts, '\\', '\', [rfReplaceAll]);
+  Result := DcuOutputFromDccOptions(Opts);
+  if Result = '' then Exit;
+  if TPath.IsRelativePath(Result) and (AProjectDir <> '') then
+    Result := TPath.Combine(AProjectDir, Result);
+  Result := ExcludeTrailingPathDelimiter(ExpandFileName(Result));
+end;
+
+function ShadowingDcuFiles(const ADir: string;
+  const ASources: TArray<string>): TArray<string>;
+var
+  Want: TDictionary<string, Boolean>;
+begin
+  Result := nil;
+  if (ADir = '') or not TDirectory.Exists(ADir) then Exit;
+  Want := TDictionary<string, Boolean>.Create;
+  try
+    for var S in ASources do
+    begin
+      var E := LowerCase(ExtractFileExt(S));
+      // Only what becomes a DCU - a .dfm or a .res never does.
+      if (E = '.pas') or (E = '.dpr') or (E = '.dpk') then
+        Want.AddOrSetValue(
+          LowerCase(ChangeFileExt(ExtractFileName(S), '')), True);
+    end;
+    if Want.Count = 0 then Exit;
+    try
+      for var F in TDirectory.GetFiles(ADir, '*.dcu') do
+        if Want.ContainsKey(LowerCase(ChangeFileExt(ExtractFileName(F), ''))) then
+          Result := Result + [F];
+    except
+      // an unreadable directory is not worth the whole check
+    end;
+  finally
+    Want.Free;
+  end;
+end;
+
+function DcuAsideFolder(const ADcuDir: string): string;
+begin
+  if ADcuDir = '' then Exit('');
+  Result := TPath.Combine(ADcuDir,
+    'aside-' + FormatDateTime('yyyymmdd-hhnnss', Now));
+end;
+
+function MoveDcuAside(const AFile, AAsideDir: string;
+  out ATarget, AError: string): Boolean;
+begin
+  ATarget := '';
+  AError := '';
+  Result := False;
+  if not TFile.Exists(AFile) then
+  begin
+    AError := 'the file is not there any more';
+    Exit;
+  end;
+  if AAsideDir = '' then
+  begin
+    AError := 'no target directory';
+    Exit;
+  end;
+  ATarget := TPath.Combine(AAsideDir, ExtractFileName(AFile));
+  try
+    if not TDirectory.Exists(AAsideDir) then TDirectory.CreateDirectory(AAsideDir);
+    // MOVED, never deleted: a .dcu is cheap to rebuild but the user said
+    // nothing about deleting anything, and the installer moves the bridge
+    // aside for the same reason.
+    TFile.Move(AFile, ATarget);
+    Result := True;
+  except
+    on E: Exception do
+    begin
+      AError := E.Message;
+      ATarget := '';
+    end;
+  end;
+end;
+
+function DebugIssueId(const AIssue: TDebugIssue): string;
+var
+  H: Cardinal;
+begin
+  // FNV-1a over kind + file: the PLACE, so an id from an older scan finds
+  // nothing rather than something else.
+  H := 2166136261;
+  for var C in IntToStr(Ord(AIssue.Kind)) + '|' + LowerCase(AIssue.FileName) do
+  begin
+    H := H xor Cardinal(Ord(C));
+    H := H * 16777619;
+  end;
+  Result := IntToHex(H, 8);
+end;
 
 procedure CountLineEndings(const ABytes: TBytes; out ACrLf, ALfOnly, ACrOnly: Integer);
 var
@@ -1317,6 +1502,43 @@ begin
         end;
       finally
         Seen.Free;
+      end;
+    end;
+
+    // ---- 7. what the LSP reads instead of the sources -----------------------
+    // MEASURED 2026-10-20: 103 .dcu in the directory the .delphilsp.json
+    // names made DelphiLSP load 60 project units FROM THE DCU, and for
+    // their symbols it then reports a definition without a file
+    // ("definition found in file:///(-1:0)") - so go to definition, find
+    // references and rename come back empty for exactly those units. The
+    // DCUs were OLDER than the sources and were used anyway, which is why
+    // keeping them current is no answer: the directory has to be empty.
+    if not Cancelled and Tick('LSP configuration') and
+       (AInput.LspConfigFile <> '') then
+    begin
+      var LspDcu := LspDcuDirOfConfig(AInput.LspConfigFile, AInput.ProjectDir);
+      if LspDcu <> '' then
+      begin
+        var Shadow := ShadowingDcuFiles(LspDcu, AInput.ProjectSources);
+        for var F in Shadow do
+        begin
+          var Src := '';
+          if Sources.TryGetValue(
+            UpperCase(ChangeFileExt(ExtractFileName(F), '')), Src) then ;
+          var Age := '';
+          if (Src <> '') and TFile.Exists(Src) and
+             (TFile.GetLastWriteTime(F) < TFile.GetLastWriteTime(Src)) then
+            Age := ', and it is OLDER than the source';
+          Add(dkLspDcu, dsProblem, F, 0,
+            Format('DelphiLSP can take this unit from the .dcu instead of ' +
+              'its source (%s)%s', [TimeText(F), Age]),
+            'the DCU output of ' + ExtractFileName(AInput.LspConfigFile) +
+            ' is read by the LSP like the compiler reads it: for a unit it ' +
+            'loads from a .dcu it has no source position, so go to ' +
+            'definition, find references and rename answer nothing for its ' +
+            'symbols. Move the .dcu aside (this check can) and restart the ' +
+            'session (lsp_restart)', True);
+        end;
       end;
     end;
 

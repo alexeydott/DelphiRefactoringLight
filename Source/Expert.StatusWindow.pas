@@ -64,7 +64,7 @@ uses
   Expert.AutoImport, Expert.ContextMenu, Expert.DialogHelper,   // IdeThemes: interface uses
   Expert.BlameGutter, Expert.BlameDialogs, Expert.VcsBlame,
   Expert.MessagesReader, Expert.StructureErrors, Expert.McpServer, Lsp.Client,
-  Expert.Version, Expert.ListViewSort, Mcp.Protocol,
+  Expert.Version, Expert.ListViewSort, Mcp.Protocol, Expert.DebugConsistency,
   System.JSON, System.StrUtils, Vcl.StdCtrls;
 
 // TCustomFrame.Create does InitInheritedComponent(Self, TFrame) for every
@@ -98,6 +98,8 @@ type
     FResValid: Boolean;
     FMemText, FMemDetail: string;  // refreshed every 10th tick (walks caches)
     FMemValid: Boolean;
+    FLspDcuDir: string;    // the DCU output that configuration names
+    FLspDcuCount: Integer; // .dcu lying there - they shadow sources
     FLspJson: string;      // .delphilsp.json of the current project,
     FLspJsonValid: Boolean;  // looked up every 10th tick (disk + modules)
     procedure Row(const ACaption, AValue, ADetail: string;
@@ -633,6 +635,44 @@ begin
   else
     Row('  project configuration', '.delphilsp.json is MISSING',
       LspConfigMissingHintLong, slBad);
+
+  // WHAT THE SESSION READS INSTEAD OF THE SOURCES. Measured 2026-10-20:
+  // 103 .dcu in exactly this directory made DelphiLSP load 60 project
+  // units from them, and for their symbols it then answers a definition
+  // without a file - go to definition, find references and rename come
+  // back empty with nothing anywhere saying why. One directory listing,
+  // on the same 10th tick as the lookup above.
+  if FLspJson <> '' then
+  begin
+    if FTicks mod 10 = 0 then
+    begin
+      FLspDcuCount := 0;
+      try
+        FLspDcuDir := LspDcuDirOfConfig(FLspJson,
+          ExcludeTrailingPathDelimiter(ExtractFilePath(FLspJson)));
+        if (FLspDcuDir <> '') and TDirectory.Exists(FLspDcuDir) then
+          FLspDcuCount := Length(TDirectory.GetFiles(FLspDcuDir, '*.dcu'));
+      except
+        FLspDcuDir := '';
+        FLspDcuCount := 0;
+      end;
+    end;
+    if FLspDcuDir = '' then
+      Row('  DCU output of that configuration', 'none named',
+        'Nothing can shadow a source through it.', slNeutral)
+    else if FLspDcuCount = 0 then
+      Row('  DCU output of that configuration', 'empty - good',
+        FLspDcuDir + ' holds no .dcu, so the session reads the sources.',
+        slGood)
+    else
+      Row('  DCU output of that configuration',
+        Format('%d .dcu - the session may read THOSE', [FLspDcuCount]),
+        FLspDcuDir + ' - DelphiLSP reads this directory like the compiler ' +
+        'does: for a unit it loads from a .dcu it has no source position, ' +
+        'so go to definition, find references and rename answer nothing ' +
+        'for that unit''s symbols. Project checks > Debug consistency ' +
+        'names them per unit and can move them aside.', slBad);
+  end;
 
   // The VERIFICATION session is the one that answers the scans since 1.10.0,
   // and it pushes no diagnostics at all - so its own line, or a freshly

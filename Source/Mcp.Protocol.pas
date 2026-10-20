@@ -1569,9 +1569,20 @@ const
     '{"name":"debug_consistency","description":"Checks the active project for reasons why break' +
     'points are not hit or debug info does not match: duplicate sources on the search path, str' +
     'ay DCUs, LF line endings, debug options and directives, outdated executable / symbol files' +
-    ', host application, duplicate DLL/BPL copies. Returns counts per kind and at most \"max\" ' +
-    'rows (default 60, problems first).","inputSchema":{"type":"object","properties"' +
-    ':{"max":{"type":"integer","description":"Rows to list, 0 = all."},"instance":{"type":"integer","description":"Process id of the IDE to use. Normally omitt' +
+    ', host application, duplicate DLL/BPL copies - and the one that makes ' +
+    'DelphiLSP itself answer nothing: a .dcu of a project unit lying in the ' +
+    'DCU output its .delphilsp.json names, which it reads INSTEAD of the ' +
+    'source (measured: go to definition, find references and rename then come ' +
+    'back empty for that unit''s symbols, and the session log says ' +
+    '\"definition found in file:///(-1:0)\"). Returns counts per kind and at ' +
+    'most \"max\" rows (default 60, problems first), each with an id. Those ' +
+    'DCU findings - and only those - can be fixed from here: apply=true with ' +
+    'their ids MOVES the .dcu into a subdirectory of its own folder (never ' +
+    'deletes it), after which lsp_restart gets a session that reads the ' +
+    'sources.","inputSchema":{"type":"object","properties"' +
+    ':{"max":{"type":"integer","description":"Rows to list, 0 = all."},' +
+    '"fix_ids":{"type":"array","items":{"type":"string"},"description":"Ids from a previous call - the .dcu files to move aside. Required for apply."},' +
+    ApplyIdsProp + ',"instance":{"type":"integer","description":"Process id of the IDE to use. Normally omitt' +
     'ed - the IDE is chosen automatically (see ide_instances)."}}}}' +
     ',' +
     '{"name":"blame","description":"git/svn blame of a file (revision, author, date, summary pe' +

@@ -6,6 +6,36 @@ development builds and were never released.
 
 ---
 
+## 2.4.0 - 2026-10-20
+
+### When DelphiLSP reads a .dcu instead of your source
+
+A session log finally named the cause of answers that had looked like a
+plugin defect for weeks: the `.delphilsp.json` tells the compiler where to
+put DCUs (`-NU`), and a `.dcu` of a project unit lying there is **read
+instead of the source**. For every symbol of such a unit DelphiLSP then
+reports a definition without a file - the log says `definition found in
+file:///(-1:0)` - so go to definition, find references and rename come back
+empty while hover still works. Measured: 103 DCUs made 60 project units
+load that way, and they were OLDER than the sources and were used anyway,
+so keeping them current is no answer. Only an empty directory is.
+
+It is visible now and it can be fixed:
+
+- The **status window** says it under DelphiLSP: the DCU output that
+  configuration names, and whether it is empty ("good") or holds N `.dcu`
+  the session may read instead of the sources (red). One directory listing
+  every tenth tick.
+- **Project checks > Debug consistency** - and the `debug_consistency`
+  tool - report one finding per shadowing `.dcu`, with the source it hides
+  and whether it is even older than that source. Those findings, and only
+  those, can be fixed from there: `apply=true` with their ids **moves** the
+  files into a dated subdirectory of their own folder (never deletes them),
+  after which `lsp_restart` gets a session that reads the sources again.
+
+Measured against this repository while writing it: 108 `.dcu` in exactly
+the directory its own `-NU` names, all 108 shadowing a project source.
+
 ## 2.3.0 - 2026-10-20
 
 ### The project itself: open it, close it, add and remove files

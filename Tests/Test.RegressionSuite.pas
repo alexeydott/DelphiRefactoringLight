@@ -199,6 +199,15 @@ type
     ///  file list has to be a reviewable change like every other write.
     ///  </summary>
     [Test] procedure AProjectActionSaysWhatHappensToUnsavedWork;
+    /// <summary>Measured 2026-10-20 through the session log: 103 .dcu in
+    ///  the directory the .delphilsp.json names made DelphiLSP load 60
+    ///  project units FROM those, and for their symbols it answers a
+    ///  definition without a file - so go to definition, find references
+    ///  and rename come back empty with nothing saying why. They were
+    ///  OLDER than the sources and were used anyway, so only an empty
+    ///  directory helps. This pins the three pure steps: find the
+    ///  directory, find what shadows a source, move it aside.</summary>
+    [Test] procedure TheLspDcuShadowIsFoundAndMovable;
   end;
 
   /// <summary>Issue #13: while DelphiLSP loads a big project (12-30 s) its
@@ -1749,6 +1758,67 @@ begin
 
   Assert.AreEqual('', Bad, Bad);
   Assert.IsTrue(Props > 200, 'every parameter of every tool was looked at');
+end;
+
+procedure TMcpPipeRegressionTests.TheLspDcuShadowIsFoundAndMovable;
+var
+  Dir, Cfg, Err, Target: string;
+begin
+  // 1. the option, in the shapes a real dccOptions line has.
+  Assert.AreEqual('.\DCU\Win64\Debug',
+    DcuOutputFromDccOptions('-$O- --no-config -NU.\DCU\Win64\Debug -NSSystem'),
+    'the -NU of our own configuration, verbatim');
+  Assert.AreEqual('C:\out dir\dcu',
+    DcuOutputFromDccOptions('-I"c:\x" -NU"C:\out dir\dcu" -R"c:\y"'),
+    'a quoted path with a space');
+  Assert.AreEqual('', DcuOutputFromDccOptions('-$O- -NSSystem -NB"c:\dcp"'),
+    'no -NU at all');
+  Assert.AreEqual('', DcuOutputFromDccOptions(''), 'nothing');
+
+  Dir := TPath.Combine(TPath.GetTempPath, 'rl-dcu-' + IntToStr(GetCurrentThreadId));
+  try
+    TDirectory.CreateDirectory(Dir);
+    // 2. a config file as the IDE writes it: the options are ONE JSON
+    //    string, so the backslashes are escaped in it.
+    Cfg := TPath.Combine(Dir, 'Demo.delphilsp.json');
+    TFile.WriteAllText(Cfg,
+      '{"settings":{"project":"file:///x","dccOptions":"-$O- ' +
+      '-NU.\\\\DCU\\\\Win64\\\\Debug -NSSystem","projectFiles":[]}}');
+    Assert.AreEqual(TPath.Combine(Dir, 'DCU\Win64\Debug'),
+      LspDcuDirOfConfig(Cfg, Dir),
+      'the directory, resolved against the project like the compiler does');
+
+    // 3. what shadows a SOURCE - and what does not.
+    var DcuDir := TPath.Combine(Dir, 'DCU\Win64\Debug');
+    TDirectory.CreateDirectory(DcuDir);
+    for var N in ['Unit1.dcu', 'Unit2.dcu', 'Vcl.Forms.dcu'] do
+      TFile.WriteAllText(TPath.Combine(DcuDir, N), 'x');
+    var Shadow := ShadowingDcuFiles(DcuDir,
+      [TPath.Combine(Dir, 'Unit1.pas'), TPath.Combine(Dir, 'Demo.dpr'),
+       TPath.Combine(Dir, 'Unit9.pas'), TPath.Combine(Dir, 'Main.dfm')]);
+    Assert.AreEqual(1, Integer(Length(Shadow)),
+      'only the .dcu of a unit the PROJECT has: ' + string.Join(', ', Shadow));
+    Assert.IsTrue(SameText(ExtractFileName(Shadow[0]), 'Unit1.dcu'),
+      'and that is Unit1.dcu: ' + Shadow[0]);
+
+    // 4. moved aside, not deleted - and the directory is clean afterwards.
+    var Aside := DcuAsideFolder(DcuDir);
+    Assert.IsTrue(MoveDcuAside(Shadow[0], Aside, Target, Err), Err);
+    Assert.IsFalse(TFile.Exists(Shadow[0]),
+      'the compiler no longer finds it there');
+    Assert.IsTrue(TFile.Exists(Target), 'but it still exists: ' + Target);
+    Assert.AreEqual(0, Integer(Length(ShadowingDcuFiles(DcuDir,
+      [TPath.Combine(Dir, 'Unit1.pas')]))),
+      'and the check sees nothing shadowing any more');
+    Assert.IsFalse(MoveDcuAside(Shadow[0], Aside, Target, Err),
+      'moving it twice is refused');
+    Assert.IsTrue(Err <> '', 'with a reason');
+  finally
+    try
+      if TDirectory.Exists(Dir) then TDirectory.Delete(Dir, True);
+    except
+    end;
+  end;
 end;
 
 procedure TMcpPipeRegressionTests.AProjectActionSaysWhatHappensToUnsavedWork;
