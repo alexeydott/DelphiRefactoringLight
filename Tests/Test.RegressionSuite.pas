@@ -344,6 +344,12 @@ type
   public
     [Test] procedure EditGuard_MatchesWholeWordsOnly;
     [Test] procedure ForeignAnswerAtADeclaration_IsRecognised;
+    /// <summary>Issue #49: renaming a parameter from inside the body
+    ///  changed the implementation header and left the declaration in the
+    ///  class alone - and Delphi requires the two names to be identical
+    ///  (measured with dcc32 37.0: E2037 plus an undeclared identifier for
+    ///  every use in the body), so the result did not compile.</summary>
+    [Test] procedure AParameterIsDeclaredTwiceAndBothMustFollow;
   end;
 
   /// <summary>Found by running the check on the user's real project
@@ -3431,6 +3437,109 @@ begin
 end;
 
 { TRenameGuardTests }
+
+procedure TRenameGuardTests.AParameterIsDeclaredTwiceAndBothMustFollow;
+const
+  // the reporter's shape, plus a wrapped list and a free routine
+  Src =
+    'unit U;'#10 +                                          // 0
+    'interface'#10 +                                        // 1
+    'type'#10 +                                             // 2
+    '  TForm1 = class(TObject)'#10 +                        // 3
+    '  public'#10 +                                         // 4
+    '    procedure SetTitle(const Title: string);'#10 +     // 5
+    '    function Wrapped(const A: Integer;'#10 +           // 6
+    '      const Title: string): Boolean;'#10 +             // 7
+    '  end;'#10 +                                           // 8
+    'procedure Free1(const Title: string);'#10 +            // 9
+    'implementation'#10 +                                   // 10
+    'procedure TForm1.SetTitle(const Title: string);'#10 +  // 11
+    'begin'#10 +                                            // 12
+    'end;'#10 +                                             // 13
+    'function TForm1.Wrapped(const A: Integer;'#10 +        // 14
+    '  const Title: string): Boolean;'#10 +                 // 15
+    'begin'#10 +                                            // 16
+    'end;'#10 +                                             // 17
+    'procedure Free1(const Title: string);'#10 +            // 18
+    'begin'#10 +                                            // 19
+    'end;'#10 +                                             // 20
+    'end.';                                                 // 21
+  // Overloads: the partner is the declaration that carries that parameter
+  // AT THAT PLACE. Both of these declare A and B - at swapped places - so
+  // "the other declaration mentions the name somewhere" is not enough.
+  Ovl =
+    'unit V;'#10 +                                                     // 0
+    'interface'#10 +                                                   // 1
+    'type'#10 +                                                        // 2
+    '  TC = class'#10 +                                                // 3
+    '    procedure Init(const B: string; const A: Integer); overload;'#10 + // 4
+    '    procedure Init(const A: Integer; const B: string); overload;'#10 + // 5
+    '  end;'#10 +                                                      // 6
+    'implementation'#10 +                                              // 7
+    'procedure TC.Init(const B: string; const A: Integer);'#10 +       // 8
+    'begin'#10 +                                                       // 9
+    'end;'#10 +                                                        // 10
+    'procedure TC.Init(const A: Integer; const B: string);'#10 +       // 11
+    'begin'#10 +                                                       // 12
+    'end;'#10 +                                                        // 13
+    'end.';                                                            // 14
+var
+  P: Integer;
+begin
+  var Lines := string(Src).Split([#10]);
+
+  // THE REPORTED CASE: from the implementation header to the declaration
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 11, 'Title', P),
+    'the class declaration carries the same parameter');
+  Assert.AreEqual(5, P, 'and that is the line the rename also has to change');
+  // ...and the same rename started on the declaration
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 5, 'Title', P), 'the other way');
+  Assert.AreEqual(11, P);
+
+  // a WRAPPED list: the partner's name is not on its first line
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 14, 'Title', P), 'wrapped');
+  Assert.AreEqual(7, P, 'the continuation line, not the header line');
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 6, 'Title', P), 'and back');
+  Assert.AreEqual(15, P);
+  // ...and the anchor itself may BE a continuation line: that is what
+  // DelphiLSP answers for a wrapped header (1.15.4)
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 7, 'Title', P),
+    'a continuation line belongs to its header');
+  Assert.AreEqual(15, P);
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 15, 'Title', P), 'the same there');
+  Assert.AreEqual(7, P);
+
+  // a FREE routine declared in the interface section - same rule
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 18, 'Title', P), 'free routine');
+  Assert.AreEqual(9, P);
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 9, 'Title', P), 'and back');
+  Assert.AreEqual(18, P);
+
+  // what is NOT a parameter of that header
+  Assert.IsFalse(FindParameterPartnerLine(Lines, 11, 'SetTitle', P),
+    'the routine''s own name is renamed through its own partner query');
+  Assert.IsFalse(FindParameterPartnerLine(Lines, 12, 'Title', P),
+    '"begin" is no header');
+  Assert.IsFalse(FindParameterPartnerLine(Lines, 11, 'Caption', P),
+    'a name the header does not declare');
+
+  // OVERLOADS: only the declaration that carries that parameter at that
+  // place - the other one is a different routine
+  var OL := string(Ovl).Split([#10]);
+  Assert.IsTrue(FindParameterPartnerLine(OL, 11, 'B', P), 'B of the second overload');
+  Assert.AreEqual(5, P,
+    'the declaration that has B SECOND - line 4 has a B too, at the front');
+  Assert.IsTrue(FindParameterPartnerLine(OL, 8, 'B', P), 'B of the first overload');
+  Assert.AreEqual(4, P, 'and that one pairs the other way round');
+  Assert.IsTrue(FindParameterPartnerLine(OL, 11, 'A', P), 'A of the second');
+  Assert.AreEqual(5, P);
+
+  // and the predicate the rename's anchor decision asks
+  Assert.IsTrue(HeaderDeclaresParameter(Lines, 5, 'Title'),
+    'a declaration declares its parameters - DelphiLSP answers nothing there');
+  Assert.IsFalse(HeaderDeclaresParameter(Lines, 5, 'SetTitle'), 'its own name');
+  Assert.IsFalse(HeaderDeclaresParameter(Lines, 4, 'Title'), '"public" is no header');
+end;
 
 procedure TRenameGuardTests.EditGuard_MatchesWholeWordsOnly;
 var

@@ -6,6 +6,39 @@ development builds and were never released.
 
 ---
 
+## 2.6.1 - 2026-10-20
+
+### Renaming a parameter changes both of its declarations (issue #49)
+
+Reported by stepand76: put the cursor on a parameter in the method body,
+rename it, and the implementation header and the body followed - the
+declaration in the class did not. Measured with dcc32 37.0 before anything
+was written: Delphi requires a routine's parameter names to be **identical**
+in its declaration and in its implementation header, for a class method and
+for a free routine alike. So the result does not compile - E2037
+"Declaration of 'X' differs from previous declaration", plus an undeclared
+identifier for every use in the body.
+
+Why it happened: a parameter is declared twice, and DelphiLSP answers
+nothing at either of the two. The rename verifies every occurrence against
+the positions it knows the symbol by, so the second declaration answered
+"no idea" and was listed as unverified and left alone - the safe direction
+for an unknown occurrence, and exactly wrong for this one.
+
+The pairing now comes from the sources, where it is decidable: the same
+parameter, at the same place in the list, in the routine's other header -
+a wrapped parameter list included, and for an overloaded routine only the
+declaration that really carries that parameter at that place. Both halves
+of the rename reach it, so it no longer matters whether the cursor is in
+the body, on the implementation header or on the declaration.
+
+And starting the rename ON the parameter in the class declaration works at
+all now: DelphiLSP answers nothing there, the caret line was not recognised
+as declaring anything, and the rename refused after waiting for an answer
+that cannot come.
+
+---
+
 ## 2.6.0 - 2026-10-20
 
 ### One menu entry for a move, and a dialog that settles the target
