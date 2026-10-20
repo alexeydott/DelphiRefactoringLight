@@ -1405,10 +1405,14 @@ begin
   // of a whole library output dir) - summarise by kind, then list at most
   // "max" rows so the answer stays readable.
   // ---- the one thing this check can FIX -----------------------------------
-  // A .dcu in the LSP's own DCU output is read instead of the source, and
-  // then DelphiLSP has no source position for that unit's symbols
-  // (measured). Moving it aside is reversible and cheap, so the check
-  // offers it - for the ids you name, like every other check here.
+  // A .dcu that is OLDER than its own source, in a place where the compiler
+  // could use that source instead: then the .dcu shadows it and the answers
+  // describe an older version of the file. Moving it aside is reversible
+  // and cheap, so the check offers it - for the ids you name, like every
+  // other check here. Measured 2026-10-20: everything ELSE about .dcu files
+  // in that directory is NOT a fix - a unit the LSP loads from a .dcu
+  // answers with its source position, and removing one that is the only way
+  // to its unit costs the answer entirely.
   var WantIds: TArray<string> := nil;
   var IdArr := AArgs.GetValue<TJSONArray>('fix_ids', nil);
   if IdArr <> nil then
@@ -1416,9 +1420,10 @@ begin
   var DoApply := ArgBool(AArgs, 'apply');
   if DoApply and (Length(WantIds) = 0) then
     Exit(McpErr('apply needs "fix_ids" - list the findings first and name ' +
-      'the ones to act on. Only "LSP reads a DCU" findings can be fixed ' +
-      'here: their .dcu is MOVED into a subdirectory of its own folder, ' +
-      'never deleted.'));
+      'the ones to act on. Only a finding the answer marks as fixable has a ' +
+      'cure here (a .dcu older than its source, in a place where the ' +
+      'compiler can use the source instead): it is MOVED into a ' +
+      'subdirectory of its own folder, never deleted.'));
   var Moved := TDictionary<string, string>.Create;
   var AsideDir := '';
   try
@@ -1430,10 +1435,14 @@ begin
         for var W in WantIds do
           if W = Id then Wanted := True;
         if not Wanted then Continue;
-        if I.Kind <> dkLspDcu then
+        // Fixable is the per-FINDING answer: since 2.5.0 a dkLspDcu
+        // row can also be the directory itself (incomplete output),
+        // and the cure for that one is a build, not a move.
+        if (I.Kind <> dkLspDcu) or not I.Fixable then
         begin
-          Moved.AddOrSetValue(Id, 'NOT fixed: a "' +
-            DebugIssueKindName(I.Kind) + '" finding has no fix here');
+          Moved.AddOrSetValue(Id, 'NOT fixed: this "' +
+            DebugIssueKindName(I.Kind) + '" finding has no fix here - ' +
+            I.Hint);
           Continue;
         end;
         if AsideDir = '' then

@@ -97,12 +97,63 @@ function DcuOutputFromDccOptions(const AOptions: string): string;
 ///  none.</summary>
 function LspDcuDirOfConfig(const AConfigFile, AProjectDir: string): string;
 
-/// <summary>The .dcu files in ADir that belong to one of ASources (same
-///  base name). Those are the ones DelphiLSP can take instead of the
-///  source - and then it has no source position for their symbols.
-///  </summary>
-function ShadowingDcuFiles(const ADir: string;
-  const ASources: TArray<string>): TArray<string>;
+/// <summary>How many units the LSP configuration lists for this project
+///  (its projectFiles) - the number a DCU output directory that matches the
+///  project has one .dcu for. 0 when the file cannot be read.</summary>
+function LspProjectUnitCount(const AConfigFile: string): Integer;
+
+/// <summary>The directories the LSP configuration tells the compiler to
+///  SEARCH for units (-U of its dccOptions), resolved against the project.
+///  A unit whose source lies in none of them can only be reached through
+///  the project file list or a .dcu.</summary>
+function LspUnitSearchDirs(const AConfigFile, AProjectDir: string): TArray<string>;
+
+type
+  /// <summary>What the DCU output directory of the LSP configuration holds,
+  ///  measured against the project's sources.</summary>
+  TLspDcuDirState = record
+    /// <summary>Project units that compile to a .dcu at all.</summary>
+    UnitCount: Integer;
+    /// <summary>...and have one in this directory.</summary>
+    Present: Integer;
+    /// <summary>Unit names that do not - empty when the directory matches
+    ///  the project.</summary>
+    Missing: TArray<string>;
+    /// <summary>.dcu files here that are OLDER than their own source, with
+    ///  the source path in the same order.</summary>
+    Stale: TArray<string>;
+    StaleSource: TArray<string>;
+    /// <summary>...and for each of those, whether the compiler could use
+    ///  the source instead (its directory is one the LSP searches). Only
+    ///  then does moving the .dcu aside help; otherwise the .dcu is the
+    ///  only way to that unit and removing it costs the answer.</summary>
+    StaleReplaceable: TArray<Boolean>;
+  end;
+
+/// <summary>What that directory holds, measured against ASources.
+///  MEASURED 2026-10-20, eight states on a live session with one variable
+///  changed per step (probe: go to definition on a symbol of another unit
+///  of the same project):
+///  * a unit the LSP loads from a .dcu DOES come back with its source
+///    position - with debug information and without it, from the output
+///    directory and from a search path directory, as a .dcu and packed in
+///    the installed package's .dcp, and even when that one file is four
+///    days old. Six of the eight states answered correctly.
+///  * what failed was an INCOMPLETE directory: 107 units from one build
+///    plus the queried unit's .dcu missing, so it had to come from another
+///    build - then the answer was empty and the server logged "Kibitz
+///    definition found in file:///(-1:0)"; with every provider gone it
+///    could not compile at all ("kkError"). Putting that one file back made
+///    it answer again.
+///  So the finding is NOT "there are .dcu files here" (they are what makes
+///  it work) but "this directory does not match your sources": units
+///  missing from it, or a .dcu older than its own source - and the cure is
+///  a build, not deleting things. Moving a .dcu aside only helps where the
+///  compiler can reach the source instead (a .dpr project whose units are
+///  on its search path - the documented case of another session, whose log
+///  showed 60 units loaded from .dcu and removing them fixed it).</summary>
+function InspectLspDcuDir(const ADir: string;
+  const ASources, AReachableDirs: TArray<string>): TLspDcuDirState;
 
 /// <summary>Moves one .dcu into a subdirectory of its own directory, so
 ///  the compiler no longer finds it and the file is still there. The
@@ -331,7 +382,8 @@ function OptionState(const AValue: string): Integer;   // 1 on, 0 off, -1 unknow
 implementation
 
 uses
-  System.Classes, System.IOUtils, System.StrUtils, System.DateUtils;
+  System.Classes, System.IOUtils, System.StrUtils, System.DateUtils,
+  System.Math;
 
 function OptionState(const AValue: string): Integer;
 var
@@ -379,6 +431,32 @@ begin
   end;
 end;
 
+// The dccOptions value is a JSON string: every backslash and every quote
+// inside it is escaped. Replacing only the backslashes leaves a backslash
+// in front of each quote, and a quoted path then parses as an entry of its
+// own (measured 2026-10-20: "c:\rtl" came out as C:\c:\rtl).
+function JsonUnescape(const AText: string): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  I := 1;
+  while I <= Length(AText) do
+  begin
+    if (AText[I] = '\') and (I < Length(AText)) then
+    begin
+      case AText[I + 1] of
+        '\', '"', '/': begin Result := Result + AText[I + 1]; Inc(I, 2); Continue; end;
+        'n': begin Result := Result + #10; Inc(I, 2); Continue; end;
+        'r': begin Result := Result + #13; Inc(I, 2); Continue; end;
+        't': begin Result := Result + #9; Inc(I, 2); Continue; end;
+      end;
+    end;
+    Result := Result + AText[I];
+    Inc(I);
+  end;
+end;
+
 function LspDcuDirOfConfig(const AConfigFile, AProjectDir: string): string;
 var
   Text, Opts: string;
@@ -400,9 +478,7 @@ begin
   var Q := PosEx('"', Text, P + 1);
   while (Q > 1) and (Text[Q - 1] = '\') do Q := PosEx('"', Text, Q + 1);
   if Q = 0 then Exit;
-  Opts := Copy(Text, P + 1, Q - P - 1);
-  // JSON escapes: only the backslash matters for a path.
-  Opts := StringReplace(Opts, '\\', '\', [rfReplaceAll]);
+  Opts := JsonUnescape(Copy(Text, P + 1, Q - P - 1));
   Result := DcuOutputFromDccOptions(Opts);
   if Result = '' then Exit;
   if TPath.IsRelativePath(Result) and (AProjectDir <> '') then
@@ -410,14 +486,103 @@ begin
   Result := ExcludeTrailingPathDelimiter(ExpandFileName(Result));
 end;
 
-function ShadowingDcuFiles(const ADir: string;
-  const ASources: TArray<string>): TArray<string>;
+function LspProjectUnitCount(const AConfigFile: string): Integer;
 var
-  Want: TDictionary<string, Boolean>;
+  Text: string;
+begin
+  Result := 0;
+  if (AConfigFile = '') or not TFile.Exists(AConfigFile) then Exit;
+  try
+    Text := TDelphiFileEncoding.ReadAll(AConfigFile);
+  except
+    Exit;
+  end;
+  var P := Pos('"projectFiles"', Text);
+  if P = 0 then Exit;
+  // One entry per unit: {"name": "...", "file": "file:///..."}. Counting
+  // the name keys is enough and needs no JSON parser in a 1 s tick.
+  var Q := PosEx('"name"', Text, P);
+  while Q > 0 do
+  begin
+    Inc(Result);
+    Q := PosEx('"name"', Text, Q + 1);
+  end;
+end;
+
+function LspUnitSearchDirs(const AConfigFile, AProjectDir: string): TArray<string>;
+var
+  Text, Opts, Raw: string;
 begin
   Result := nil;
-  if (ADir = '') or not TDirectory.Exists(ADir) then Exit;
-  Want := TDictionary<string, Boolean>.Create;
+  if AProjectDir <> '' then
+    Result := [ExcludeTrailingPathDelimiter(ExpandFileName(AProjectDir))];
+  if (AConfigFile = '') or not TFile.Exists(AConfigFile) then Exit;
+  try
+    Text := TDelphiFileEncoding.ReadAll(AConfigFile);
+  except
+    Exit;
+  end;
+  var P := Pos('"dccOptions"', Text);
+  if P = 0 then Exit;
+  P := PosEx('"', Text, P + Length('"dccOptions"') + 1);
+  if P = 0 then Exit;
+  var Q := PosEx('"', Text, P + 1);
+  while (Q > 1) and (Text[Q - 1] = '\') do Q := PosEx('"', Text, Q + 1);
+  if Q = 0 then Exit;
+  Opts := JsonUnescape(Copy(Text, P + 1, Q - P - 1));
+
+  // -U is ONE option whose value continues past a closing quote:
+  //   -U"c:\rtl";..\Source;"c:\more"
+  // Reading only up to that quote is the mistake that cost an hour on
+  // 2026-10-20 ("the source directory is on no search path" - it was).
+  var I := Pos('-U', Opts);
+  if I = 0 then Exit;
+  Inc(I, 2);
+  Raw := '';
+  while I <= Length(Opts) do
+  begin
+    if Opts[I] = '"' then
+    begin
+      Inc(I);
+      while (I <= Length(Opts)) and (Opts[I] <> '"') do
+      begin
+        Raw := Raw + Opts[I];
+        Inc(I);
+      end;
+      Inc(I);   // the closing quote
+      Continue;
+    end;
+    if Opts[I] = ' ' then Break;   // the option ends at an unquoted blank
+    Raw := Raw + Opts[I];
+    Inc(I);
+  end;
+
+  for var Entry in Raw.Split([';']) do
+  begin
+    var D := Trim(Entry);
+    if D = '' then Continue;
+    if TPath.IsRelativePath(D) and (AProjectDir <> '') then
+      D := TPath.Combine(AProjectDir, D);
+    try
+      D := ExcludeTrailingPathDelimiter(ExpandFileName(D));
+    except
+      Continue;
+    end;
+    var Known := False;
+    for var E in Result do
+      if SameText(E, D) then Known := True;
+    if not Known then Result := Result + [D];
+  end;
+end;
+
+function InspectLspDcuDir(const ADir: string;
+  const ASources, AReachableDirs: TArray<string>): TLspDcuDirState;
+var
+  Want: TDictionary<string, string>;   // unit name -> its source path
+begin
+  Result := Default(TLspDcuDirState);
+  if ADir = '' then Exit;
+  Want := TDictionary<string, string>.Create;
   try
     for var S in ASources do
     begin
@@ -425,15 +590,48 @@ begin
       // Only what becomes a DCU - a .dfm or a .res never does.
       if (E = '.pas') or (E = '.dpr') or (E = '.dpk') then
         Want.AddOrSetValue(
-          LowerCase(ChangeFileExt(ExtractFileName(S), '')), True);
+          LowerCase(ChangeFileExt(ExtractFileName(S), '')), S);
     end;
+    Result.UnitCount := Want.Count;
     if Want.Count = 0 then Exit;
-    try
-      for var F in TDirectory.GetFiles(ADir, '*.dcu') do
-        if Want.ContainsKey(LowerCase(ChangeFileExt(ExtractFileName(F), ''))) then
-          Result := Result + [F];
-    except
-      // an unreadable directory is not worth the whole check
+    for var Pair in Want do
+    begin
+      // From the SOURCE's own spelling: the dictionary key is lower
+      // case for the lookup, and a row naming "unit1.dcu" for
+      // Unit1.pas reads like a file nobody has.
+      var F := TPath.Combine(ADir,
+        ChangeFileExt(ExtractFileName(Pair.Value), '.dcu'));
+      if not TFile.Exists(F) then
+      begin
+        Result.Missing := Result.Missing + [Pair.Key];
+        Continue;
+      end;
+      Inc(Result.Present);
+      // The .dcu describes the source it was compiled from. Older than
+      // that source means its positions belong to code that has changed.
+      var Older: Boolean;
+      try
+        Older := TFile.Exists(Pair.Value) and
+          (TFile.GetLastWriteTime(F) < TFile.GetLastWriteTime(Pair.Value));
+      except
+        Older := False;
+      end;
+      if not Older then Continue;
+      // Can the compiler use the source instead? Only then is removing
+      // this file a cure rather than the loss of the only way to the unit.
+      var SrcDir := '';
+      try
+        SrcDir := ExcludeTrailingPathDelimiter(
+          ExpandFileName(ExtractFileDir(Pair.Value)));
+      except
+        SrcDir := '';
+      end;
+      var Reachable := False;
+      for var D in AReachableDirs do
+        if (D <> '') and SameText(D, SrcDir) then Reachable := True;
+      Result.Stale := Result.Stale + [F];
+      Result.StaleSource := Result.StaleSource + [Pair.Value];
+      Result.StaleReplaceable := Result.StaleReplaceable + [Reachable];
     end;
   finally
     Want.Free;
@@ -1519,36 +1717,48 @@ begin
       var LspDcu := LspDcuDirOfConfig(AInput.LspConfigFile, AInput.ProjectDir);
       if LspDcu <> '' then
       begin
-        var Shadow := ShadowingDcuFiles(LspDcu, AInput.ProjectSources);
-        for var F in Shadow do
-        begin
-          var Src := '';
-          if Sources.TryGetValue(
-            UpperCase(ChangeFileExt(ExtractFileName(F), '')), Src) then ;
-          var Age := '';
-          if (Src <> '') and TFile.Exists(Src) and
-             (TFile.GetLastWriteTime(F) < TFile.GetLastWriteTime(Src)) then
-            Age := ', and it is OLDER than the source';
-          // A WARNING, not a problem: measured 2026-10-20, a session
-          // answered correctly WITH these files and badly without them,
-          // so their presence is a risk and not a diagnosis. One case is
-          // documented for real (another session''s log showed 60 units
-          // loaded as DCU and removing them fixed it) - that is what
-          // makes it worth reporting at all.
-          Add(dkLspDcu, dsWarning, F, 0,
-            Format('DelphiLSP can take this unit from the .dcu instead of ' +
-              'its source (%s)%s', [TimeText(F), Age]),
-            'the DCU output of ' + ExtractFileName(AInput.LspConfigFile) +
-            ' is searched by the LSP like the compiler searches it, and a ' +
-            'unit it loads from a .dcu has no source position - then go to ' +
-            'definition, find references and rename answer nothing for its ' +
-            'symbols. Whether it happens depends on the compiler''s own ' +
-            'rules (timestamps, matching options), so this is a RISK, not ' +
-            'a diagnosis: the session log proves it per case ("Kibitz ' +
-            'definition found in file:///(-1:0)" - which can have other ' +
-            'causes too). Moving the .dcu aside (this check can) and ' +
-            'restarting the session (lsp_restart) removes the risk', True);
-        end;
+        var DcuState := InspectLspDcuDir(LspDcu, AInput.ProjectSources,
+          LspUnitSearchDirs(AInput.LspConfigFile, AInput.ProjectDir));
+        // A PARTIALLY built output directory is the state that was measured
+        // to break go to definition: the units that are there come from one
+        // build, the missing one has to come from another (the installed
+        // package''s .dcp, a copy on the library path) - and then the
+        // compiler resolves it without a source position. A directory with
+        // NO .dcu at all is not reported: everything then comes from one
+        // place, which is consistent.
+        if (DcuState.Present > 0) and (Length(DcuState.Missing) > 0) then
+          Add(dkLspDcu, dsWarning, LspDcu, 0,
+            Format('%d of %d project units have no .dcu in the DCU output ' +
+              'of this configuration, %d do',
+              [Length(DcuState.Missing), DcuState.UnitCount,
+               DcuState.Present]),
+            'the LSP searches this directory the way the compiler does. ' +
+            'MEASURED: with a COMPLETE directory go to definition across ' +
+            'units answers with the source position - and with one unit ' +
+            'missing from it the same query answered nothing, because that ' +
+            'unit then came from another build (the server logged "Kibitz ' +
+            'definition found in file:///(-1:0)"); putting the file back ' +
+            'made it answer again. So the cure is to BUILD the project for ' +
+            'this configuration, not to remove anything. First missing: ' +
+            string.Join(', ', Copy(DcuState.Missing, 0,
+              Min(5, Length(DcuState.Missing)))));
+        for var I := 0 to High(DcuState.Stale) do
+          Add(dkLspDcu, dsWarning, DcuState.Stale[I], 0,
+            Format('this .dcu (%s) is OLDER than its source (%s)',
+              [TimeText(DcuState.Stale[I]),
+               TimeText(DcuState.StaleSource[I])]),
+            IfThen(DcuState.StaleReplaceable[I],
+              'the compiler can reach the source as well (its directory is ' +
+              'on the LSP''s search path), so this .dcu can shadow it: the ' +
+              'answers would describe an older version of the file. ' +
+              'Build the project, or move the .dcu aside (this check can) ' +
+              'and restart the session with lsp_restart',
+              'the source is in no directory the LSP searches, so this ' +
+              '.dcu is the ONLY way to that unit - moving it aside does ' +
+              'not help, it costs go to definition for the unit entirely ' +
+              '(measured). Build the project for this configuration so ' +
+              'the .dcu matches the source again'),
+            DcuState.StaleReplaceable[I]);
       end;
     end;
 

@@ -1575,18 +1575,21 @@ const
     'points are not hit or debug info does not match: duplicate sources on the search path, str' +
     'ay DCUs, LF line endings, debug options and directives, outdated executable / symbol files' +
     ', host application, duplicate DLL/BPL copies - and the one that makes ' +
-    'DelphiLSP itself answer nothing: a .dcu of a project unit lying in the ' +
-    'DCU output its .delphilsp.json names, which it reads INSTEAD of the ' +
-    'source (measured: go to definition, find references and rename then come ' +
-    'back empty for that unit''s symbols, and the session log says ' +
-    '\"definition found in file:///(-1:0)\"). Returns counts per kind and at ' +
-    'most \"max\" rows (default 60, problems first), each with an id. Those ' +
-    'DCU findings - and only those - can be fixed from here: apply=true with ' +
-    'their ids MOVES the .dcu into a subdirectory of its own folder (never ' +
-    'deletes it), after which lsp_restart gets a session that reads the ' +
-    'sources.","inputSchema":{"type":"object","properties"' +
+    'DelphiLSP itself answer nothing: the DCU output its .delphilsp.json ' +
+    'names not matching the sources. MEASURED: with that directory COMPLETE, ' +
+    'go to definition across units answers with the source position (a unit ' +
+    'loaded from a .dcu answers fine); with one unit missing from it, that ' +
+    'unit comes from another build and the answer is empty, and the session ' +
+    'log says \"definition found in file:///(-1:0)\". So the check reports ' +
+    'what does not match - units missing there, a .dcu older than its own ' +
+    'source - and the cure is a BUILD of that configuration. Returns counts ' +
+    'per kind and at most \"max\" rows (default 60, problems first), each ' +
+    'with an id. Only a stale .dcu whose source the compiler can reach ' +
+    'instead can be fixed from here: apply=true with its id MOVES it into a ' +
+    'subdirectory of its own folder (never deletes it); run lsp_restart ' +
+    'afterwards.","inputSchema":{"type":"object","properties"' +
     ':{"max":{"type":"integer","description":"Rows to list, 0 = all."},' +
-    '"fix_ids":{"type":"array","items":{"type":"string"},"description":"Ids from a previous call - the .dcu files to move aside. Required for apply."},' +
+    '"fix_ids":{"type":"array","items":{"type":"string"},"description":"Ids from a previous call - the stale .dcu files to move aside. Only a finding the answer marks as fixable has that cure; for anything else the call says so and changes nothing. Required for apply."},' +
     ApplyIdsProp + ',"instance":{"type":"integer","description":"Process id of the IDE to use. Normally omitt' +
     'ed - the IDE is chosen automatically (see ide_instances)."}}}}' +
     ',' +
@@ -1833,17 +1836,18 @@ begin
     Add('The session HAS analysed this unit, so this is about the symbol, ' +
       'not about reaching the file. Two causes look identical from here: ' +
       'DelphiLSP does not resolve this symbol (a private / public overload ' +
-      'pair is the known case - Delphi 13.1, RSS-5463), or the symbol''s ' +
-      'DECLARING unit was compiled without a source position - taken ' +
-      'from a precompiled .dcu, for instance. The session log shows the ' +
-      'second one as "definition found in file:///(-1:0)" (measured: that ' +
-      'line says the compiler had no source position, a .dcu is one cause ' +
-      'of it, not the only one). Switch ' +
-      '"Log this plugin''s DelphiLSP session" on (settings LspLogging, ' +
-      'next session) and read %TEMP%\DelphiLSP\RefactoringLight*.log. ' +
-      'DCUs of the project''s own units reach the session through the IDE ' +
-      'library path or through the DCU output directory its ' +
-      '.delphilsp.json names.');
+      'pair is the known case - Delphi 13.1, RSS-5463), or it could not ' +
+      'give the DECLARING unit a source position. MEASURED for the second ' +
+      'one: it happens when the DCU output directory of the project''s ' +
+      'configuration does not match the sources - a unit missing there ' +
+      'comes from another build and loses its position, while a COMPLETE ' +
+      'directory answers correctly (with or without debug information). ' +
+      'get_status says whether it is complete, debug_consistency names ' +
+      'what is missing, and a build of that configuration is the cure. ' +
+      'The session log shows this case as "definition found in ' +
+      'file:///(-1:0)": switch "Log this plugin''s DelphiLSP session" on ' +
+      '(settings LspLogging, next session) and read ' +
+      '%TEMP%\DelphiLSP\RefactoringLight*.log.');
     if ASuggestIndex then
       Add('find_original_symbol answers both cases from the identifier ' +
         'index - for a declaration that is usually the answer you want.');

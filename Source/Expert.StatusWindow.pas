@@ -99,13 +99,16 @@ type
     FMemText, FMemDetail: string;  // refreshed every 10th tick (walks caches)
     FMemValid: Boolean;
     FLspDcuDir: string;    // the DCU output that configuration names
-    FLspDcuCount: Integer; // .dcu lying there - they shadow sources
+    FLspDcuCount: Integer; // .dcu lying there - how many, against
+                           // FLspDcuUnits: a COMPLETE set is what makes
+                           // cross-unit answers work (measured)
     FLspDcuValid: Boolean; // ...looked up at all yet? The SNAPSHOT
                            // collector ticks once per get_status call,
                            // so "every tenth tick" alone answered
                            // nine times out of ten from nothing.
     FLspJson: string;      // .delphilsp.json of the current project,
     FLspJsonValid: Boolean;  // looked up every 10th tick (disk + modules)
+    FLspDcuUnits: Integer;   // units the configuration lists
     procedure Row(const ACaption, AValue, ADetail: string;
       ALevel: TStatusLevel = slNeutral);
   public
@@ -640,43 +643,62 @@ begin
     Row('  project configuration', '.delphilsp.json is MISSING',
       LspConfigMissingHintLong, slBad);
 
-  // WHAT THE SESSION READS INSTEAD OF THE SOURCES. Measured 2026-10-20:
-  // 103 .dcu in exactly this directory made DelphiLSP load 60 project
-  // units from them, and for their symbols it then answers a definition
-  // without a file - go to definition, find references and rename come
-  // back empty with nothing anywhere saying why. One directory listing,
-  // on the same 10th tick as the lookup above.
+  // WHERE THE SESSION GETS THE OTHER UNITS FROM. Measured 2026-10-20,
+  // eight states with one variable changed each: a unit the LSP loads from
+  // a .dcu DOES answer with its source position - so the number of .dcu
+  // here is not the problem. What broke go to definition was this
+  // directory NOT MATCHING the project: with one unit's .dcu missing from
+  // it, that unit came from another build and the answer was empty
+  // ("Kibitz definition found in file:///(-1:0)" in the session log);
+  // putting the file back made it answer again. One directory listing and
+  // one read of the configuration, on the same 10th tick as above.
   if FLspJson <> '' then
   begin
     if not FLspDcuValid or (FTicks mod 10 = 0) then
     begin
       FLspDcuValid := True;
       FLspDcuCount := 0;
+      FLspDcuUnits := 0;
       try
         FLspDcuDir := LspDcuDirOfConfig(FLspJson,
           ExcludeTrailingPathDelimiter(ExtractFilePath(FLspJson)));
         if (FLspDcuDir <> '') and TDirectory.Exists(FLspDcuDir) then
           FLspDcuCount := Length(TDirectory.GetFiles(FLspDcuDir, '*.dcu'));
+        FLspDcuUnits := LspProjectUnitCount(FLspJson);
       except
         FLspDcuDir := '';
         FLspDcuCount := 0;
+        FLspDcuUnits := 0;
       end;
     end;
     if FLspDcuDir = '' then
       Row('  DCU output of that configuration', 'none named',
-        'Nothing can shadow a source through it.', slNeutral)
+        'The session resolves the project''s other units from the search ' +
+        'path or from the sources.', slNeutral)
     else if FLspDcuCount = 0 then
-      Row('  DCU output of that configuration', 'empty - good',
-        FLspDcuDir + ' holds no .dcu, so the session reads the sources.',
-        slGood)
+      Row('  DCU output of that configuration', 'empty',
+        FLspDcuDir + ' holds no .dcu, so every other unit comes from the ' +
+        'same place - the search path or the sources. That is consistent; ' +
+        'a build of this configuration fills the directory.', slNeutral)
+    else if (FLspDcuUnits > 0) and (FLspDcuCount < FLspDcuUnits) then
+      Row('  DCU output of that configuration',
+        Format('INCOMPLETE - %d .dcu for %d unit(s)',
+          [FLspDcuCount, FLspDcuUnits]),
+        FLspDcuDir + ' - the LSP searches it the way the compiler does. ' +
+        'MEASURED: a unit MISSING here comes from another build instead ' +
+        '(a copy on the library path, the installed package''s .dcp), and ' +
+        'then go to definition, find references and rename can answer ' +
+        'nothing for its symbols. Build this configuration - removing ' +
+        '.dcu files makes it worse, not better. Project checks > Debug ' +
+        'consistency names what is missing.', slBad)
     else
       Row('  DCU output of that configuration',
-        Format('%d .dcu - the session may read THOSE', [FLspDcuCount]),
-        FLspDcuDir + ' - DelphiLSP reads this directory like the compiler ' +
-        'does: for a unit it loads from a .dcu it has no source position, ' +
-        'so go to definition, find references and rename answer nothing ' +
-        'for that unit''s symbols. Project checks > Debug consistency ' +
-        'names them per unit and can move them aside.', slBad);
+        Format('%d .dcu for %d unit(s)', [FLspDcuCount, FLspDcuUnits]),
+        FLspDcuDir + ' - the LSP reads it the way the compiler does, and ' +
+        'it matches the project: measured, that is the state in which go ' +
+        'to definition across units answers with the source position. ' +
+        'Keep it built; a .dcu older than its source is what Project ' +
+        'checks > Debug consistency reports.', slGood);
   end;
 
   // The VERIFICATION session is the one that answers the scans since 1.10.0,

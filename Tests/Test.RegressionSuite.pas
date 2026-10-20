@@ -885,7 +885,10 @@ uses
   Expert.MoveToUnit, Expert.SafeDeletePlan, Expert.McpTools, Expert.WithRewriter,
   Expert.SemanticReplace, Expert.SelectionValidator, Expert.ExtractMethod,
   Expert.SignatureEdit, Expert.MethodEdit, System.StrUtils,
-  Expert.DebugConsistency, DIH.Placeholders, DIH.FileOps;
+  Expert.DebugConsistency, DIH.Placeholders, DIH.FileOps,
+  // Generics.Collections: TJSONObject.GetPair is inline and the
+  // doubled-note test calls it (H2443 without this entry).
+  System.DateUtils, System.Generics.Collections;
 
 const
   NL = sLineBreak;
@@ -1788,29 +1791,96 @@ begin
       LspDcuDirOfConfig(Cfg, Dir),
       'the directory, resolved against the project like the compiler does');
 
-    // 3. what shadows a SOURCE - and what does not.
+    // 3. WHAT THE DIRECTORY SAYS ABOUT ITSELF. MEASURED on a live session
+    //    (2026-10-20, eight states, one variable each): a unit the LSP
+    //    loads from a .dcu DOES answer with its source position, so the
+    //    finding is not "there are .dcu files here". What broke go to
+    //    definition was a directory that does not MATCH the sources: a
+    //    unit missing from it, or a .dcu older than its own source.
     var DcuDir := TPath.Combine(Dir, 'DCU\Win64\Debug');
     TDirectory.CreateDirectory(DcuDir);
-    for var N in ['Unit1.dcu', 'Unit2.dcu', 'Vcl.Forms.dcu'] do
+    var Far := TPath.Combine(Dir, 'Elsewhere');
+    TDirectory.CreateDirectory(Far);
+    for var N in ['Unit1.pas', 'Unit2.pas', 'Demo.dpr', 'Main.dfm'] do
+      TFile.WriteAllText(TPath.Combine(Dir, N), 'unit ' + N + ';');
+    TFile.WriteAllText(TPath.Combine(Far, 'Hidden.pas'), 'unit Hidden;');
+    var Sources := [TPath.Combine(Dir, 'Unit1.pas'), TPath.Combine(Dir, 'Unit2.pas'),
+                    TPath.Combine(Dir, 'Demo.dpr'), TPath.Combine(Dir, 'Main.dfm'),
+                    TPath.Combine(Far, 'Hidden.pas')];
+    // Unit1 + Hidden built, Unit2 and the project file not - and a .dcu
+    // of a unit the project does not have must not count at all.
+    for var N in ['Unit1.dcu', 'Hidden.dcu', 'Vcl.Forms.dcu'] do
       TFile.WriteAllText(TPath.Combine(DcuDir, N), 'x');
-    var Shadow := ShadowingDcuFiles(DcuDir,
-      [TPath.Combine(Dir, 'Unit1.pas'), TPath.Combine(Dir, 'Demo.dpr'),
-       TPath.Combine(Dir, 'Unit9.pas'), TPath.Combine(Dir, 'Main.dfm')]);
-    Assert.AreEqual(1, Integer(Length(Shadow)),
-      'only the .dcu of a unit the PROJECT has: ' + string.Join(', ', Shadow));
-    Assert.IsTrue(SameText(ExtractFileName(Shadow[0]), 'Unit1.dcu'),
-      'and that is Unit1.dcu: ' + Shadow[0]);
+    var St := InspectLspDcuDir(DcuDir, Sources, [Dir]);
+    Assert.AreEqual(4, St.UnitCount,
+      'the .dfm is no unit, the other four are');
+    Assert.AreEqual(2, St.Present, 'Unit1.dcu and Hidden.dcu');
+    Assert.AreEqual(2, Integer(Length(St.Missing)),
+      'Unit2 and Demo have none: ' + string.Join(', ', St.Missing));
+    Assert.AreEqual(0, Integer(Length(St.Stale)),
+      'and none of them is older than its source');
 
-    // 4. moved aside, not deleted - and the directory is clean afterwards.
+    // A .dcu older than its source is the one per-file finding left - and
+    // whether moving it aside HELPS depends on the compiler being able to
+    // reach the source instead.
+    TFile.SetLastWriteTime(TPath.Combine(DcuDir, 'Unit1.dcu'),
+      IncHour(Now, -5));
+    TFile.SetLastWriteTime(TPath.Combine(DcuDir, 'Hidden.dcu'),
+      IncHour(Now, -5));
+    St := InspectLspDcuDir(DcuDir, Sources, [Dir]);
+    Assert.AreEqual(2, Integer(Length(St.Stale)),
+      'both are older than their source now');
+    var Repl := '';
+    for var I := 0 to High(St.Stale) do
+      if St.StaleReplaceable[I] then
+        Repl := Repl + ExtractFileName(St.Stale[I]) + ' ';
+    Assert.IsTrue(Repl = 'Unit1.dcu ',
+      'only Unit1''s source lies in a directory the LSP searches, so only ' +
+      'there is removing the .dcu a cure; Hidden.dcu is the ONLY way to ' +
+      'that unit and removing it would cost the answer (measured)');
+
+    // And the count a complete directory is compared against comes from
+    // the configuration itself.
+    var Cfg3 := TPath.Combine(Dir, 'Count.delphilsp.json');
+    TFile.WriteAllText(Cfg3,
+      '{"settings":{"dccOptions":"-$O-","projectFiles":[' +
+      '{"name":"A","file":"file:///a"},{"name":"B","file":"file:///b"}]}}');
+    Assert.AreEqual(2, LspProjectUnitCount(Cfg3), 'two units listed');
+    Assert.AreEqual(0, LspProjectUnitCount(TPath.Combine(Dir, 'none.json')),
+      'and no file is no claim');
+
+    // ...and the search path is read as ONE option whose value continues
+    // past a closing quote - reading only to that quote is the mistake
+    // that said "the source directory is on no search path" when it was.
+    var Cfg2 := TPath.Combine(Dir, 'Paths.delphilsp.json');
+    TFile.WriteAllText(Cfg2,
+      '{"settings":{"dccOptions":"-$O- -U\"c:\\\\rtl\";..\\\\Source;\"c:\\\\more\" ' +
+      '-NSSystem"}}');
+    var Dirs := LspUnitSearchDirs(Cfg2, Dir);
+    Assert.IsTrue(Length(Dirs) >= 4,
+      'project dir + three -U entries: ' + string.Join(' | ', Dirs));
+    var HasSource := False;
+    // '..\Source' is resolved against the project directory, so it is
+    // the PARENT's Source - that is what the compiler does with it.
+    var Want := ExcludeTrailingPathDelimiter(ExpandFileName(
+      TPath.Combine(Dir, '..\Source')));
+    for var D in Dirs do
+      if SameText(D, Want) then HasSource := True;
+    Assert.IsTrue(HasSource,
+      'the relative entry BETWEEN two quoted ones is found as ' + Want +
+      ': ' + string.Join(' | ', Dirs));
+
+    // 4. moved aside, not deleted - and the finding is gone afterwards.
+    var Stale1 := TPath.Combine(DcuDir, 'Unit1.dcu');
     var Aside := DcuAsideFolder(DcuDir);
-    Assert.IsTrue(MoveDcuAside(Shadow[0], Aside, Target, Err), Err);
-    Assert.IsFalse(TFile.Exists(Shadow[0]),
+    Assert.IsTrue(MoveDcuAside(Stale1, Aside, Target, Err), Err);
+    Assert.IsFalse(TFile.Exists(Stale1),
       'the compiler no longer finds it there');
     Assert.IsTrue(TFile.Exists(Target), 'but it still exists: ' + Target);
-    Assert.AreEqual(0, Integer(Length(ShadowingDcuFiles(DcuDir,
-      [TPath.Combine(Dir, 'Unit1.pas')]))),
-      'and the check sees nothing shadowing any more');
-    Assert.IsFalse(MoveDcuAside(Shadow[0], Aside, Target, Err),
+    St := InspectLspDcuDir(DcuDir, [TPath.Combine(Dir, 'Unit1.pas')], [Dir]);
+    Assert.AreEqual(0, Integer(Length(St.Stale)),
+      'and no stale .dcu is reported any more');
+    Assert.IsFalse(MoveDcuAside(Stale1, Aside, Target, Err),
       'moving it twice is refused');
     Assert.IsTrue(Err <> '', 'with a reason');
   finally

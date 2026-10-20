@@ -6,6 +6,59 @@ development builds and were never released.
 
 ---
 
+## 2.5.0 - 2026-10-20
+
+### What really decides a cross-unit "go to definition"
+
+Eight states on a live session, one variable changed per step, the same
+probe every time - go to definition on a symbol declared in another unit of
+the same project:
+
+| the project's DCU output | the declaring unit came from | answer |
+|---|---|---|
+| complete | that directory | the source position |
+| complete, built WITHOUT debug information | that directory | the source position |
+| that one `.dcu` moved to a search-path directory | there | the source position |
+| ...replaced by the Release build's `.dcu` | a Release artefact | the source position |
+| ...only the installed package's `.dcp` left | the `.dcp` | the source position |
+| one four-day-old `.dcu` among fresh ones | that directory | the source position |
+| **one unit's `.dcu` missing from it** | another build | **nothing** |
+| ...and no other provider at all | nowhere | **nothing** |
+
+So a unit the LSP loads from a `.dcu` *does* come back with its source
+position - which makes two things from 2.4.x wrong, and this release
+corrects them:
+
+- **The claim.** "A unit it loads from a `.dcu` has no source position" was
+  the sentence in the status window, in the check's hint and in the
+  empty-answer note of every `lsp_*` tool. Six of the eight states above
+  refute it. What fails is a DCU output directory that does not **match**
+  the sources: the units that are there come from one build, the missing one
+  has to come from another, and then the compiler resolves it without a
+  position (`Kibitz definition found in file:///(-1:0)` in the session log).
+  Putting the single file back made the same query answer again.
+- **The cure.** The check offered to move every one of those `.dcu` files
+  aside - 108 rows on its own repository - and that is how you *create* the
+  broken state. It now reports only what does not match: an **incomplete**
+  directory (one row, with the first missing units named and a build as the
+  cure) and a `.dcu` that is **older than its own source** (one row each).
+  Moving a file aside survives only where the compiler could use the source
+  instead, which is the one documented case it was built for: a project
+  whose units are on its search path, where a stale `.dcu` really does
+  shadow them.
+
+### Smaller things
+
+- The status row says `N .dcu for M unit(s)` in green when the directory
+  matches the project and `INCOMPLETE - N .dcu for M unit(s)` in red when it
+  does not. The unit count comes from the configuration's own `projectFiles`.
+- `debug_consistency` with `apply` refuses a finding whose cure is a build
+  instead of trying to move a directory aside, and says which cure it has.
+- A `.dcu` is reported under the spelling of its source (`Unit1.dcu`, not
+  `unit1.dcu`), and two compiler hints are gone from the build.
+
+---
+
 ## 2.4.2 - 2026-10-20
 
 ### What the DCU finding may and may not claim
