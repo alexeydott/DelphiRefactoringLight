@@ -580,7 +580,9 @@ begin
   Assert.IsTrue(Length(Blocks) >= 5, Format(
     'the menu tree must still have its separated groups (found %d)',
     [Length(Blocks)]));
-  Assert.IsTrue(Length(Blocks[0]) >= 4, Format(
+  // three since 2.6.0: "Move to new unit..." and "Move to unit..." became
+  // one entry whose dialog settles the target
+  Assert.IsTrue(Length(Blocks[0]) >= 3, Format(
     'block 1 (create something new) must carry its entries (found %d)',
     [Length(Blocks[0])]));
   Assert.IsTrue(Length(Blocks[1]) >= 8, Format(

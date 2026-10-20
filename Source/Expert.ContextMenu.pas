@@ -158,7 +158,6 @@ type
     procedure OnResolveMissingUnits(Sender: TObject);
     procedure OnUsesCleanup(Sender: TObject);
     procedure OnMoveToUnit(Sender: TObject);
-    procedure OnMoveToNewUnit(Sender: TObject);
     procedure OnExtractInterface(Sender: TObject);
     procedure OnAddToExistingInterface(Sender: TObject);
     procedure OnDelegateInterface(Sender: TObject);
@@ -484,7 +483,8 @@ begin
   // "where does it stand?" is the question that costs time, and the answer
   // must not depend on when an entry was added.
   Leaf(Root, 'Declare as constant...',    OnDeclareConstant,      skDeclareConstant, REQ_EDITOR);
-  Plain(Root, 'Move to new unit...',      OnMoveToNewUnit,        REQ_EDITOR);
+  // ONE entry for both targets: its dialog settles whether the symbol goes
+  // into an existing unit or into a new one (user request 2026-10-20).
   Leaf(Root, 'Move to unit...',           OnMoveToUnit,           skMoveToUnit, REQ_EDITOR);
   Leaf(Root, 'Wrap in try..finally',      OnWrapTryFinally,       skWrapTryFinally,  REQ_EDITOR);
 
@@ -1712,11 +1712,6 @@ end;
 procedure TContextMenuInstaller.OnUsesCleanup(Sender: TObject);
 begin
   CleanupUsesCurrentUnit;
-end;
-
-procedure TContextMenuInstaller.OnMoveToNewUnit(Sender: TObject);
-begin
-  MoveToNewUnitAtCursor;
 end;
 
 procedure TContextMenuInstaller.OnMoveToUnit(Sender: TObject);

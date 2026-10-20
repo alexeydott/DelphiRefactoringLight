@@ -6,6 +6,35 @@ development builds and were never released.
 
 ---
 
+## 2.6.0 - 2026-10-20
+
+### One menu entry for a move, and a dialog that settles the target
+
+"Move to unit..." and "Move to new unit..." were two editor-menu entries
+for the same refactoring, and the second one had no dialog at all: it asked
+for a name in a text box and then either moved or came back with a message
+box. They are one entry now, and its dialog carries the decision:
+
+- **into an existing unit** - the project's other units, filterable, with
+  the preview of the planned edits it always had;
+- **into a new unit** - its name, suggested from the symbol
+  (`TCustomerList` becomes `CustomerList`) and checked while it is typed: a
+  name that cannot be a unit name, or one whose file is already there, says
+  so instead of enabling **Move**.
+
+What the new unit's own refusal needs - deciding whether the moved
+declaration can live without the unit it came from, which would otherwise
+be a circular unit reference - asks DelphiLSP, so it runs when **Move** is
+pressed rather than on every keystroke, and a refusal keeps the dialog open
+with its reason instead of closing it and showing a message box.
+
+The shortcut (`Ctrl+Shift+M` by default) opens the same dialog, so both
+targets are reachable from the keyboard. Nothing changed for the MCP tools:
+`move_to_unit` and `move_to_new_unit` each name their target explicitly and
+both stay.
+
+---
+
 ## 2.5.2 - 2026-10-20
 
 ### The answer stops offering a fix it does not have

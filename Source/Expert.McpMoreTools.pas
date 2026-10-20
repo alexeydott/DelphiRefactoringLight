@@ -2044,10 +2044,11 @@ begin
   NewUnit := Trim(AArgs.GetValue<string>('new_unit', ''));
   if (AArgs.GetValue<string>('file', '') = '') or (L1 < 1) or (C1 < 1) or (NewUnit = '') then
     Exit(McpErr('arguments "file", "line", "column" (1-based) and "new_unit" are required'));
-  if SameText(ExtractFileExt(NewUnit), '.pas') then NewUnit := ChangeFileExt(NewUnit, '');
-  var NewFile := NewUnit;
-  if ExtractFilePath(NewFile) = '' then NewFile := ExtractFilePath(F) + NewFile;
-  NewFile := NewFile + '.pas';
+  // ONE rule for what a typed name means - the dialog uses the same one,
+  // so the tool cannot resolve a relative path differently than the menu
+  var PathProblem := '';
+  var NewFile := PlanNewUnitFile(NewUnit, F, PathProblem);
+  if NewFile = '' then Exit(McpErr(PathProblem));
   DoApply := ArgBool(AArgs, 'apply');
   Token := ArgStr(AArgs, 'token');
   var Ok := False;
