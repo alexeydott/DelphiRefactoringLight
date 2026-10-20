@@ -100,6 +100,10 @@ type
     FMemValid: Boolean;
     FLspDcuDir: string;    // the DCU output that configuration names
     FLspDcuCount: Integer; // .dcu lying there - they shadow sources
+    FLspDcuValid: Boolean; // ...looked up at all yet? The SNAPSHOT
+                           // collector ticks once per get_status call,
+                           // so "every tenth tick" alone answered
+                           // nine times out of ten from nothing.
     FLspJson: string;      // .delphilsp.json of the current project,
     FLspJsonValid: Boolean;  // looked up every 10th tick (disk + modules)
     procedure Row(const ACaption, AValue, ADetail: string;
@@ -644,8 +648,9 @@ begin
   // on the same 10th tick as the lookup above.
   if FLspJson <> '' then
   begin
-    if FTicks mod 10 = 0 then
+    if not FLspDcuValid or (FTicks mod 10 = 0) then
     begin
+      FLspDcuValid := True;
       FLspDcuCount := 0;
       try
         FLspDcuDir := LspDcuDirOfConfig(FLspJson,

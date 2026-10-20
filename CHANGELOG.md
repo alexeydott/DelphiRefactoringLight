@@ -6,6 +6,24 @@ development builds and were never released.
 
 ---
 
+## 2.4.1 - 2026-10-20
+
+### What the first live call of the new tools found
+
+- **`lsp_restart` now restarts.** It ended the session and promised that the
+  next request would start a fresh one - which is false for the `lsp_*`
+  tools: they deliberately never cold-start, so they answered "the session
+  is not running yet" instead. A new session is started right away now
+  (`start_again=false` keeps the old behaviour, and then the answer says
+  what that means).
+- **The status row "DCU output of that configuration" said "none named"**
+  while `debug_consistency` found 108 `.dcu` through the same config file.
+  The row computed its value on every tenth tick only - which is right for
+  the window, whose tick runs every second, and wrong for the snapshot
+  `get_status` uses: that one ticks once per CALL, so nine answers out of
+  ten came from nothing. It is looked up on the first call as well now,
+  like the `.delphilsp.json` row above it.
+
 ## 2.4.0 - 2026-10-20
 
 ### When DelphiLSP reads a .dcu instead of your source

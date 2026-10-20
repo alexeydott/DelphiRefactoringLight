@@ -37,7 +37,7 @@ uses
   Expert.UsesGraph, Expert.DebugConsistency, Expert.DebugConsistencyDialog,
   Expert.LineEndingDialog, Expert.FileEncodingCheck, Expert.UnusedUnits,
   Expert.UnusedUnitsDialog, Expert.LineEndingWatcher,
-  Expert.VcsBlame, Expert.BlameGutter, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
+  Expert.VcsBlame, Expert.BlameGutter, Expert.LspPrewarmer, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
   Expert.PluginSettings, Expert.IncludeExpansion, Expert.InterfaceLinks,
   Expert.SemanticReplace, Expert.SemanticReplaceWizard, Expert.MoveToUnit, Expert.SafeDelete,
   Expert.SafeDeletePlan, Expert.StatementRefactor, Expert.WithRefactorWizard,
@@ -3990,11 +3990,13 @@ end;
 function ToolLspRestart(AArgs: TJSONObject; AStop: THandle): string;
 var
   Err, Was, Cfg: string;
-  WasAlive: Boolean;
+  WasAlive, Started: Boolean;
 begin
+  var Warm := ArgBool(AArgs, 'start_again', True);
   Was := '';
   Cfg := '';
   WasAlive := False;
+  Started := False;
   // ToolsAPI for the project paths, and Reset ends two processes - main
   // thread, like every other state change of the manager.
   if not McpRunOnMain(
@@ -4004,22 +4006,40 @@ begin
       Was := M.SessionProjectFile;
       WasAlive := M.IsAlive;
       if Editor <> nil then Cfg := Editor.FindDelphiLspJson;
-      // Ends the main session AND the verification session; the next
-      // request starts a fresh one for the project that is active THEN.
+      // Ends the main session AND the verification session.
       M.Reset;
+      // ...and a tool called RESTART starts one again: the lsp_* tools
+      // deliberately never cold-start (PeekClient), so without this the
+      // session would stay down until some wizard asked for it - which
+      // the first live call of 2.4.0 ran straight into.
+      if Warm and (LspPrewarmerInstance <> nil) then
+      try
+        LspPrewarmerInstance.HandleProjectOpened(
+          Editor.GetCurrentProjectDproj);
+        Started := True;
+      except
+        // the prewarm is a convenience; a failure must not fail the restart
+      end;
     end, False, AStop, Err) then Exit(McpErr(Err));
 
   var Res := TJSONObject.Create;
   Res.AddPair('wasRunning', TJSONBool.Create(WasAlive));
   if Was <> '' then Res.AddPair('wasStartedFor', Was);
   if Cfg <> '' then Res.AddPair('configuration', Cfg);
-  Res.AddPair('note', 'The session is ended (the verification session with ' +
-    'it). The NEXT request that needs DelphiLSP starts a fresh one for the ' +
-    'project that is active then, which costs the usual cold start - ' +
-    'get_status says when it is ready. Use this after changing something ' +
-    'the session reads only at startup: the .delphilsp.json, the library ' +
-    'path, LspLogging - or when it has loaded .dcu files that have since ' +
-    'been removed.');
+  Res.AddPair('restarted', TJSONBool.Create(Started));
+  if Started then
+    Res.AddPair('note', 'The session is ended (the verification session ' +
+      'with it) and a new one is starting in the background for the active ' +
+      'project - get_status says when it is ready, which takes the usual ' +
+      'cold start. Use this after changing something the session reads ' +
+      'only at startup: the .delphilsp.json, the library path, LspLogging - ' +
+      'or when it has loaded .dcu files that have since been moved away.')
+  else
+    Res.AddPair('note', 'The session is ended (the verification session ' +
+      'with it), and NOT started again (start_again=false, or no project ' +
+      'is open). The lsp_* tools never cold-start one by themselves, so ' +
+      'until a search, a rename or a quick fix asks for it, they will ' +
+      'answer that the session is not running.');
   Result := McpOk(Res);
 end;
 

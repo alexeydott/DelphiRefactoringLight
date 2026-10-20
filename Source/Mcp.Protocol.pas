@@ -981,8 +981,13 @@ const
     'at startup - the .delphilsp.json, the library path, LspLogging - or ' +
     'to get rid of .dcu files it has loaded instead of their sources. ' +
     'Costs the usual cold start; get_status says when it is ready ' +
-    'again.",' +
-    '"inputSchema":{"type":"object","properties":{' + InstanceProp + '}}},' +
+    'again. By default a new session is started right away - the lsp_* ' +
+    'tools never cold-start one themselves, so without that they would ' +
+    'answer \"not running\" until a search or a quick fix asks for ' +
+    'it.",' +
+    '"inputSchema":{"type":"object","properties":{' +
+    '"start_again":{"type":"boolean","description":"Start a new session right away (default true). With false the session stays down until something asks for it."},' +
+    InstanceProp + '}}},' +
     '{"name":"project_open",' +
     '"description":"Opens a project (.dproj / .dpk) or a project group ' +
     'in the IDE. Opening one closes what is open, so unsaved work is ' +
