@@ -4007,14 +4007,16 @@ end;
 
 function ToolLspRestart(AArgs: TJSONObject; AStop: THandle): string;
 var
-  Err, Was, Cfg: string;
-  WasAlive, Started: Boolean;
+  Err, Was, Cfg, Why: string;
+  WasAlive, Started, Queued: Boolean;
 begin
   var Warm := ArgBool(AArgs, 'start_again', True);
   Was := '';
   Cfg := '';
+  Why := '';
   WasAlive := False;
   Started := False;
+  Queued := False;
   // ToolsAPI for the project paths, and Reset ends two processes - main
   // thread, like every other state change of the manager.
   if not McpRunOnMain(
@@ -4030,13 +4032,22 @@ begin
       // deliberately never cold-start (PeekClient), so without this the
       // session would stay down until some wizard asked for it - which
       // the first live call of 2.4.0 ran straight into.
-      if Warm and (LspPrewarmerInstance <> nil) then
+      // NOT HandleProjectOpened: it debounces re-opens of the SAME project
+      // and honours PrewarmLspOnProjectOpen, so for the project that is
+      // already open it did nothing - and "restarted" still said true
+      // (reviewing session, 2026-10-20). RestartFor answers what happened.
+      if not Warm then
+        Why := 'start_again=false'
+      else if LspPrewarmerInstance = nil then
+        Why := 'the prewarmer is not installed'
+      else
       try
-        LspPrewarmerInstance.HandleProjectOpened(
-          Editor.GetCurrentProjectDproj);
-        Started := True;
+        Started := LspPrewarmerInstance.RestartFor(
+          Editor.GetCurrentProjectDproj, Queued, Why);
       except
-        // the prewarm is a convenience; a failure must not fail the restart
+        // the start is a convenience; a failure must not fail the reset
+        on E: Exception do
+          Why := 'starting it failed: ' + E.Message;
       end;
     end, False, AStop, Err) then Exit(McpErr(Err));
 
@@ -4045,6 +4056,8 @@ begin
   if Was <> '' then Res.AddPair('wasStartedFor', Was);
   if Cfg <> '' then Res.AddPair('configuration', Cfg);
   Res.AddPair('restarted', TJSONBool.Create(Started));
+  if Queued then Res.AddPair('queued', TJSONBool.Create(True));
+  if Why <> '' then Res.AddPair('reason', Why);
   if Started then
     Res.AddPair('note', 'The session is ended (the verification session ' +
       'with it) and a new one is starting in the background for the active ' +
@@ -4052,10 +4065,15 @@ begin
       'cold start. Use this after changing something the session reads ' +
       'only at startup: the .delphilsp.json, the library path, LspLogging - ' +
       'or when it has loaded .dcu files that have since been moved away.')
+  else if Queued then
+    Res.AddPair('note', 'The session is ended (the verification session ' +
+      'with it). A start that began before is still running; the new ' +
+      'session follows as soon as it has finished - get_status says when ' +
+      'it is ready.')
   else
     Res.AddPair('note', 'The session is ended (the verification session ' +
-      'with it), and NOT started again (start_again=false, or no project ' +
-      'is open). The lsp_* tools never cold-start one by themselves, so ' +
+      'with it), and NOT started again - "reason" says why. The lsp_* ' +
+      'tools never cold-start one by themselves, so ' +
       'until a search, a rename or a quick fix asks for it, they will ' +
       'answer that the session is not running.');
   Result := McpOk(Res);
