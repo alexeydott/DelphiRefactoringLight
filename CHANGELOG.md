@@ -6,6 +6,21 @@ development builds and were never released.
 
 ---
 
+## 2.4.2 - 2026-10-20
+
+### What the DCU finding may and may not claim
+
+Measured against this repository with the session log on: with 108 `.dcu`
+in the LSP's DCU output a definition ANSWERED, and after moving all 108
+aside - directory empty, no `.dcu` on any search path, the project's own
+source directory even added to it - the same query answered `null`, with
+the agent log saying `Kibitz definition found in file:///(-1:0)`. That line
+therefore means "the compiler had no source position"; a `.dcu` is one
+cause of it, not proof. One case IS documented for real (another session's
+log: 60 units loaded as DCU, and removing them fixed it), so the finding
+stays - as a **warning about a risk**, with what it depends on and what
+proves it per case, instead of a problem that names a cause.
+
 ## 2.4.1 - 2026-10-20
 
 ### What the first live call of the new tools found

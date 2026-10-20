@@ -1529,15 +1529,25 @@ begin
           if (Src <> '') and TFile.Exists(Src) and
              (TFile.GetLastWriteTime(F) < TFile.GetLastWriteTime(Src)) then
             Age := ', and it is OLDER than the source';
-          Add(dkLspDcu, dsProblem, F, 0,
+          // A WARNING, not a problem: measured 2026-10-20, a session
+          // answered correctly WITH these files and badly without them,
+          // so their presence is a risk and not a diagnosis. One case is
+          // documented for real (another session''s log showed 60 units
+          // loaded as DCU and removing them fixed it) - that is what
+          // makes it worth reporting at all.
+          Add(dkLspDcu, dsWarning, F, 0,
             Format('DelphiLSP can take this unit from the .dcu instead of ' +
               'its source (%s)%s', [TimeText(F), Age]),
             'the DCU output of ' + ExtractFileName(AInput.LspConfigFile) +
-            ' is read by the LSP like the compiler reads it: for a unit it ' +
-            'loads from a .dcu it has no source position, so go to ' +
+            ' is searched by the LSP like the compiler searches it, and a ' +
+            'unit it loads from a .dcu has no source position - then go to ' +
             'definition, find references and rename answer nothing for its ' +
-            'symbols. Move the .dcu aside (this check can) and restart the ' +
-            'session (lsp_restart)', True);
+            'symbols. Whether it happens depends on the compiler''s own ' +
+            'rules (timestamps, matching options), so this is a RISK, not ' +
+            'a diagnosis: the session log proves it per case ("Kibitz ' +
+            'definition found in file:///(-1:0)" - which can have other ' +
+            'causes too). Moving the .dcu aside (this check can) and ' +
+            'restarting the session (lsp_restart) removes the risk', True);
         end;
       end;
     end;

@@ -1834,9 +1834,11 @@ begin
       'not about reaching the file. Two causes look identical from here: ' +
       'DelphiLSP does not resolve this symbol (a private / public overload ' +
       'pair is the known case - Delphi 13.1, RSS-5463), or the symbol''s ' +
-      'DECLARING unit was taken from a precompiled .dcu, and then the ' +
-      'compiler has no source position for it. The session log tells them ' +
-      'apart: a .dcu shows as "definition found in file:///(-1:0)". Switch ' +
+      'DECLARING unit was compiled without a source position - taken ' +
+      'from a precompiled .dcu, for instance. The session log shows the ' +
+      'second one as "definition found in file:///(-1:0)" (measured: that ' +
+      'line says the compiler had no source position, a .dcu is one cause ' +
+      'of it, not the only one). Switch ' +
       '"Log this plugin''s DelphiLSP session" on (settings LspLogging, ' +
       'next session) and read %TEMP%\DelphiLSP\RefactoringLight*.log. ' +
       'DCUs of the project''s own units reach the session through the IDE ' +
