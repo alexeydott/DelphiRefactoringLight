@@ -1807,18 +1807,37 @@ begin
     var Sources := [TPath.Combine(Dir, 'Unit1.pas'), TPath.Combine(Dir, 'Unit2.pas'),
                     TPath.Combine(Dir, 'Demo.dpr'), TPath.Combine(Dir, 'Main.dfm'),
                     TPath.Combine(Far, 'Hidden.pas')];
-    // Unit1 + Hidden built, Unit2 and the project file not - and a .dcu
-    // of a unit the project does not have must not count at all.
+    // Unit1 + Hidden built, Unit2 not - and a .dcu of a unit the project
+    // does not have must not count at all.
     for var N in ['Unit1.dcu', 'Hidden.dcu', 'Vcl.Forms.dcu'] do
       TFile.WriteAllText(TPath.Combine(DcuDir, N), 'x');
     var St := InspectLspDcuDir(DcuDir, Sources, [Dir]);
-    Assert.AreEqual(4, St.UnitCount,
-      'the .dfm is no unit, the other four are');
+    // The .dfm is no unit - and neither is the project FILE: measured over
+    // three projects of this repository, no .dcu is ever named after the
+    // .dpk or the .dpr (that file produces the .bpl or the .exe). Counting
+    // it reported the directory as incomplete by one, for a file that can
+    // never satisfy it, while the status row said it matches (live, 2.5.0).
+    Assert.AreEqual(3, St.UnitCount,
+      'three units: Unit1, Unit2, Hidden - not Main.dfm and not Demo.dpr');
     Assert.AreEqual(2, St.Present, 'Unit1.dcu and Hidden.dcu');
-    Assert.AreEqual(2, Integer(Length(St.Missing)),
-      'Unit2 and Demo have none: ' + string.Join(', ', St.Missing));
+    Assert.AreEqual(1, Integer(Length(St.Missing)),
+      'only Unit2 has none: ' + string.Join(', ', St.Missing));
+    // Its OWN spelling, not the lower-cased lookup key: the live 2.5.0
+    // answer read "First missing: delphirefactoringlight".
+    Assert.IsTrue(St.Missing[0] = 'Unit2',
+      'and it is Unit2, never the project file, spelled as the source ' +
+      'is: ' + St.Missing[0]);
     Assert.AreEqual(0, Integer(Length(St.Stale)),
       'and none of them is older than its source');
+
+    // The same for a PACKAGE, which is what the live finding was about.
+    TFile.WriteAllText(TPath.Combine(Dir, 'Pack.dpk'), 'package Pack;');
+    var StP := InspectLspDcuDir(DcuDir,
+      [TPath.Combine(Dir, 'Unit1.pas'), TPath.Combine(Dir, 'Pack.dpk')], [Dir]);
+    Assert.AreEqual(1, StP.UnitCount, 'the .dpk is no unit either');
+    Assert.AreEqual(0, Integer(Length(StP.Missing)),
+      'so a fully built package reports nothing missing: ' +
+      string.Join(', ', StP.Missing));
 
     // A .dcu older than its source is the one per-file finding left - and
     // whether moving it aside HELPS depends on the compiler being able to

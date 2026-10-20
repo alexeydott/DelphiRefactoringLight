@@ -586,9 +586,15 @@ begin
   try
     for var S in ASources do
     begin
-      var E := LowerCase(ExtractFileExt(S));
-      // Only what becomes a DCU - a .dfm or a .res never does.
-      if (E = '.pas') or (E = '.dpr') or (E = '.dpk') then
+      // ONLY a unit. MEASURED 2026-10-20 over three projects of this
+      // repository (a package and two programs, four output
+      // directories, 110 / 132 .dcu each): the project FILE itself -
+      // the .dpk or .dpr - never produces a .dcu of its own name; it
+      // produces the .bpl or the .exe. Counting it made the directory
+      // look incomplete by exactly one, for a file that can never
+      // satisfy it, and the status row (which counts the
+      // configuration's own projectFiles) said the opposite.
+      if SameText(ExtractFileExt(S), '.pas') then
         Want.AddOrSetValue(
           LowerCase(ChangeFileExt(ExtractFileName(S), '')), S);
     end;
@@ -603,7 +609,12 @@ begin
         ChangeFileExt(ExtractFileName(Pair.Value), '.dcu'));
       if not TFile.Exists(F) then
       begin
-        Result.Missing := Result.Missing + [Pair.Key];
+        // The unit's OWN spelling, for the same reason the .dcu path
+        // above takes it: "First missing: delphirefactoringlight" is
+        // what the live answer read (2.5.0), and nobody has a unit of
+        // that name.
+        Result.Missing := Result.Missing +
+          [ChangeFileExt(ExtractFileName(Pair.Value), '')];
         Continue;
       end;
       Inc(Result.Present);

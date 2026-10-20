@@ -6,6 +6,27 @@ development builds and were never released.
 
 ---
 
+## 2.5.1 - 2026-10-20
+
+### What the first live run of the new DCU check reported
+
+The 2.5.0 rules held on the project that was in the reported state - 108
+"move this .dcu aside" findings became 6, and after the build the finding
+asks for, 1. That last one was a defect: the check counted the project's
+own `.dpk` as a unit that should have a `.dcu`, so it reported the output
+directory as incomplete by exactly one, for a file that can never satisfy
+it - while the status row, which counts the configuration's own unit list,
+said the directory matches.
+
+Measured over three projects of this repository (a package and two
+programs, four output directories): **no `.dcu` is ever named after the
+`.dpk` or the `.dpr`** - that file produces the `.bpl` or the `.exe`. Only
+a `.pas` can be missing one now, which is also what the check's own source
+map has always done. And the missing unit is named as its source spells it,
+not as the lower-cased lookup key the answer printed.
+
+---
+
 ## 2.5.0 - 2026-10-20
 
 ### What really decides a cross-unit "go to definition"
