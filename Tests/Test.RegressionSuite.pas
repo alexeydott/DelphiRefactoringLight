@@ -215,6 +215,18 @@ type
   public
     [Test] procedure WrongValueType_FallsBackToTheDefault;
     [Test] procedure RenameChoices_AreRememberedAndOutOfRangeIsRefused;
+    /// <summary>User request 2026-10-20: a session cannot click the
+    ///  options page, so the settings are readable and writable by NAME -
+    ///  which only works while the descriptor, the getters, the setters
+    ///  and Save agree about every one of them. Two hand-kept lists are
+    ///  what made the legacy migration drop five values (audit #37,
+    ///  L4e).</summary>
+    [Test] procedure EverySettingIsDescribedAndWiredUp;
+    /// <summary>...and "for this IDE instance only" has to mean it: a
+    ///  Save triggered elsewhere (the rename dialog stores its scope, the
+    ///  uses cleanup its keep list) must not make a temporary change
+    ///  permanent behind the user's back.</summary>
+    [Test] procedure ASessionOnlyValueIsNeverPersisted;
   end;
 
   /// <summary>DelphiLSP answers a "go to definition" for a static class
@@ -1756,8 +1768,14 @@ begin
     'the sentence is said ONCE, not by the prefix AND the generic text: ' +
     Pos_);
   Assert.IsTrue(Pos_.StartsWith(Mine), 'the tool speaks first: ' + Pos_);
-  Assert.IsFalse(Pos_.Contains('.dcu'),
-    'a unit the session HAS analysed is not a .dcu problem: ' + Pos_);
+  // MEASURED 2026-10-20 (session log): with hover answering all along, the
+  // cause was the DECLARING unit coming from a stale .dcu. So an analysed
+  // unit must name BOTH causes and what tells them apart - the earlier
+  // version of this test demanded the opposite and was wrong.
+  Assert.IsTrue(Pos_.Contains('DECLARING unit'),
+    'the other cause is named: ' + Pos_);
+  Assert.IsTrue(Pos_.Contains('file:///(-1:0)'),
+    'with the log line that tells the two apart: ' + Pos_);
   Assert.IsTrue(Pos_.Contains('find_original_symbol'),
     'and the way out is named: ' + Pos_);
   Assert.IsTrue(Pos_.Contains('RSS-5463'),
@@ -1769,9 +1787,15 @@ begin
   Assert.IsTrue(Silent.StartsWith('DelphiLSP returned nothing'),
     'without a prefix the note says it itself: ' + Silent);
   Assert.IsTrue(Silent.Contains('.dcu'), 'the usual cause: ' + Silent);
-  Assert.IsTrue(Silent.Contains('LogModes 255'), 'and how to see it: ' + Silent);
+  // How to see it: the SETTING (which the settings tool can now flip) and
+  // the log file it writes - not the environment variable, which needs the
+  // IDE to be restarted with it.
+  Assert.IsTrue(Silent.Contains('LspLogging') and
+    Silent.Contains('RefactoringLight*.log'),
+    'and how to see it: ' + Silent);
   Assert.IsFalse(Silent.Contains('RSS-5463'),
-    'but not the position story, which does not apply here: ' + Silent);
+    'but not the overload story, which is about a unit that IS analysed: ' +
+    Silent);
 
   // A file we have just sent is simply not ready yet - that comes first,
   // before any cause at all.
@@ -2103,6 +2127,134 @@ begin
         if Had then Reg.WriteInteger('VerifySession', Old);
         Reg.CloseKey;
       end;
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
+procedure TSettingsRobustnessTests.EverySettingIsDescribedAndWiredUp;
+var
+  Bad: string;
+  Err, Text, Back: string;
+begin
+  var Infos := TPluginSettings.SettingInfos;
+  Assert.IsTrue(Length(Infos) >= 15,
+    'the descriptor must hold the settings: ' + IntToStr(Length(Infos)));
+  TPluginSettings.Load;
+  Bad := '';
+  for var Info in Infos do
+  begin
+    // Readable by name...
+    if not TPluginSettings.GetValueText(Info.Name, Back) then
+    begin
+      Bad := Bad + Info.Name + ' cannot be READ by name; ';
+      Continue;
+    end;
+    // ...and writable, with its OWN value, which must round-trip. That is
+    // what catches a setting added to the descriptor and nowhere else.
+    if not TPluginSettings.SetValueText(Info.Name, Back, Err) then
+      Bad := Bad + Info.Name + ': ' + Err + '; '
+    else
+    begin
+      TPluginSettings.GetValueText(Info.Name, Text);
+      if Text <> Back then
+        Bad := Bad + Format('%s: wrote "%s", reads "%s"; ',
+          [Info.Name, Back, Text]);
+    end;
+    if Info.DefaultText = '' then
+      if Info.Kind <> pskString then
+        Bad := Bad + Info.Name + ' has no default; ';
+    if Info.Summary = '' then
+      Bad := Bad + Info.Name + ' has no summary; ';
+  end;
+  Assert.AreEqual('', Bad, Bad);
+
+  // The three refusals a caller can run into, each with its reason.
+  Assert.IsFalse(TPluginSettings.SetValueText('NoSuchThing', '1', Err),
+    'an unknown name is refused');
+  Assert.IsTrue(Err.Contains('NoSuchThing'), 'and named: ' + Err);
+  Assert.IsFalse(TPluginSettings.SetValueText('LiveBlame', 'maybe', Err),
+    'a switch takes true or false');
+  Assert.IsTrue(Err.Contains('switch'), 'and says so: ' + Err);
+  Assert.IsFalse(TPluginSettings.SetValueText('BlameInfo', '9', Err),
+    'a number outside its range is refused');
+  Assert.IsTrue(Err.Contains('between'), 'with the range: ' + Err);
+end;
+
+procedure TSettingsRobustnessTests.ASessionOnlyValueIsNeverPersisted;
+var
+  Reg: TRegistry;
+  Key, Err, Persisted: string;
+  Had: Boolean;
+  Old: Boolean;
+begin
+  Key := TPluginSettings.RegistryKey;
+  Reg := TRegistry.Create(KEY_READ or KEY_WRITE);
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    Assert.IsTrue(Reg.OpenKey(Key, True), 'settings key');
+    Had := Reg.ValueExists('BlameUseTortoise') and
+      (Reg.GetDataType('BlameUseTortoise') = rdInteger);
+    Old := True;
+    if Had then Old := Reg.ReadBool('BlameUseTortoise');
+    Reg.CloseKey;
+    try
+      // A known state in the registry, then the opposite for THIS session.
+      TPluginSettings.Load;
+      Assert.IsTrue(TPluginSettings.SetValueText('BlameUseTortoise', 'true',
+        Err), Err);
+      TPluginSettings.Save;
+
+      Assert.IsTrue(TPluginSettings.SetValueText('BlameUseTortoise', 'false',
+        Err), Err);
+      TPluginSettings.MarkSessionOnly('BlameUseTortoise', True);
+      Assert.IsFalse(TPluginSettings.BlameUseTortoise,
+        'the change takes effect in this session at once');
+      Assert.IsTrue(TPluginSettings.IsSessionOnly('BlameUseTortoise',
+        Persisted), 'and it is marked as session-only');
+      Assert.AreEqual('True', Persisted,
+        'with the value the registry still holds');
+
+      // THE POINT: a Save from anywhere else must not persist it.
+      TPluginSettings.Save;
+      // NOT OpenKeyReadOnly: it sets TRegistry.FAccess to KEY_READ and
+      // never puts it back (read in System.Win.Registry), so every later
+      // OpenKey on this object is read-only and the restore below would
+      // raise "Fehler beim Setzen der Daten".
+      Assert.IsTrue(Reg.OpenKey(Key, False), 'read the key back');
+      try
+        Assert.IsTrue(Reg.ReadBool('BlameUseTortoise'),
+          'the registry keeps what it had - a session-only value is never ' +
+          'written, whoever saves');
+      finally
+        Reg.CloseKey;
+      end;
+
+      // Clearing the mark makes the current value ordinary again.
+      TPluginSettings.MarkSessionOnly('BlameUseTortoise', False);
+      Assert.IsFalse(TPluginSettings.IsSessionOnly('BlameUseTortoise',
+        Persisted), 'the mark is gone');
+      TPluginSettings.Save;
+      Assert.IsTrue(Reg.OpenKey(Key, False));
+      try
+        Assert.IsFalse(Reg.ReadBool('BlameUseTortoise'),
+          'and now the value is stored');
+      finally
+        Reg.CloseKey;
+      end;
+    finally
+      // the user's own value, whatever this test did
+      TPluginSettings.MarkSessionOnly('BlameUseTortoise', False);
+      if Reg.OpenKey(Key, True) then
+      try
+        if Had then Reg.WriteBool('BlameUseTortoise', Old)
+        else if Reg.ValueExists('BlameUseTortoise') then
+          Reg.DeleteValue('BlameUseTortoise');
+      finally
+        Reg.CloseKey;
+      end;
+      TPluginSettings.Load;
     end;
   finally
     Reg.Free;

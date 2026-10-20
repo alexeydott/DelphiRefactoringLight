@@ -37,7 +37,7 @@ uses
   Expert.UsesGraph, Expert.DebugConsistency, Expert.DebugConsistencyDialog,
   Expert.LineEndingDialog, Expert.FileEncodingCheck, Expert.UnusedUnits,
   Expert.UnusedUnitsDialog, Expert.LineEndingWatcher,
-  Expert.VcsBlame, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
+  Expert.VcsBlame, Expert.BlameGutter, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
   Expert.PluginSettings, Expert.IncludeExpansion, Expert.InterfaceLinks,
   Expert.SemanticReplace, Expert.SemanticReplaceWizard, Expert.MoveToUnit, Expert.SafeDelete,
   Expert.SafeDeletePlan, Expert.StatementRefactor, Expert.WithRefactorWizard,
@@ -3905,6 +3905,167 @@ begin
   Result := McpOk(Res);
 end;
 
+// ---------------------------------------------------------------------------
+//  lsp_restart - the only way out of a session that has gone wrong without
+//  restarting the IDE (reviewing session, 2026-10-20: closing and
+//  reopening the project does not restart it, and a session that loaded a
+//  stale .dcu answers definitions without a file until it dies).
+// ---------------------------------------------------------------------------
+
+function ToolLspRestart(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Err, Was, Cfg: string;
+  WasAlive: Boolean;
+begin
+  Was := '';
+  Cfg := '';
+  WasAlive := False;
+  // ToolsAPI for the project paths, and Reset ends two processes - main
+  // thread, like every other state change of the manager.
+  if not McpRunOnMain(
+    procedure
+    begin
+      var M := TLspManager.Instance;
+      Was := M.SessionProjectFile;
+      WasAlive := M.IsAlive;
+      if Editor <> nil then Cfg := Editor.FindDelphiLspJson;
+      // Ends the main session AND the verification session; the next
+      // request starts a fresh one for the project that is active THEN.
+      M.Reset;
+    end, False, AStop, Err) then Exit(McpErr(Err));
+
+  var Res := TJSONObject.Create;
+  Res.AddPair('wasRunning', TJSONBool.Create(WasAlive));
+  if Was <> '' then Res.AddPair('wasStartedFor', Was);
+  if Cfg <> '' then Res.AddPair('configuration', Cfg);
+  Res.AddPair('note', 'The session is ended (the verification session with ' +
+    'it). The NEXT request that needs DelphiLSP starts a fresh one for the ' +
+    'project that is active then, which costs the usual cold start - ' +
+    'get_status says when it is ready. Use this after changing something ' +
+    'the session reads only at startup: the .delphilsp.json, the library ' +
+    'path, LspLogging - or when it has loaded .dcu files that have since ' +
+    'been removed.');
+  Result := McpOk(Res);
+end;
+
+// ---------------------------------------------------------------------------
+//  settings - read and write the plugin''s own options (user request
+//  2026-10-20: "entweder permanent setzen oder nur fuer die aktuelle
+//  Delphi-IDE-Instanz"). The options page is the only other way in, and a
+//  foreign session cannot click it.
+// ---------------------------------------------------------------------------
+
+function SettingKindText(AKind: TPluginSettingKind): string;
+begin
+  case AKind of
+    pskBool: Result := 'switch';
+    pskInt: Result := 'number';
+  else
+    Result := 'text';
+  end;
+end;
+
+function SettingRow(const AInfo: TPluginSettingInfo): TJSONObject;
+var
+  Persisted, Value: string;
+begin
+  Result := TJSONObject.Create;
+  Result.AddPair('name', AInfo.Name);
+  Result.AddPair('kind', SettingKindText(AInfo.Kind));
+  if TPluginSettings.GetValueText(AInfo.Name, Value) then
+    Result.AddPair('value', Value);
+  Result.AddPair('default', AInfo.DefaultText);
+  if AInfo.Choices <> '' then Result.AddPair('choices', AInfo.Choices)
+  else if AInfo.Max > AInfo.Min then
+    Result.AddPair('range', Format('%d..%d', [AInfo.Min, AInfo.Max]));
+  if TPluginSettings.IsSessionOnly(AInfo.Name, Persisted) then
+  begin
+    Result.AddPair('scope', 'session');
+    // The honest part: what comes back when this IDE closes.
+    Result.AddPair('persisted', Persisted);
+  end
+  else
+    Result.AddPair('scope', 'permanent');
+  Result.AddPair('what', AInfo.Summary);
+end;
+
+function ToolSettings(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Err, RunErr, Name, Value, Scope, Before: string;
+  Session, Ok: Boolean;
+  Res: TJSONObject;
+begin
+  Name := Trim(ArgStr(AArgs, 'name'));
+  Scope := LowerCase(Trim(ArgStr(AArgs, 'scope')));
+  Ok := False;
+  RunErr := '';
+  Before := '';
+
+  if Name <> '' then
+  begin
+    if AArgs.FindValue('value') = nil then
+      Exit(McpErr('"value" is required when a "name" is given - call ' +
+        'settings without arguments to see the current values'));
+    Value := ArgStr(AArgs, 'value');
+    if (Scope <> 'permanent') and (Scope <> 'session') then
+      Exit(McpErr('"scope" must be "permanent" (stored in the registry, ' +
+        'every IDE from now on) or "session" (this IDE instance only, gone ' +
+        'when it closes) - there is no sensible default for a change that ' +
+        'may outlive the IDE'));
+    Session := Scope = 'session';
+
+    // ONE main-thread trip: the write itself is only the registry, but
+    // ApplyBlameSettings touches the editor gutter, and that is ToolsAPI.
+    if not McpRunOnMain(
+      procedure
+      begin
+        TPluginSettings.GetValueText(Name, Before);
+        Ok := TPluginSettings.SetValueText(Name, Value, RunErr);
+        if not Ok then Exit;
+        // The mark has to be set BEFORE the save: it is what makes the
+        // save keep the registry''s own value for this setting.
+        TPluginSettings.MarkSessionOnly(Name, Session);
+        if not Session then TPluginSettings.Save;
+        // The same apply the options page runs - live blame claims or
+        // hands back the gutter here, so a changed width takes effect now.
+        ApplyBlameSettings;
+      end, False, AStop, Err) then Exit(McpErr(Err));
+    if not Ok then Exit(McpErr(RunErr));
+  end;
+
+  Res := TJSONObject.Create;
+  var Arr := TJSONArray.Create;
+  for var Info in TPluginSettings.SettingInfos do
+    Arr.Add(SettingRow(Info));
+  Res.AddPair('settings', Arr);
+  Res.AddPair('registryKey', 'HKCU\' + TPluginSettings.RegistryKey);
+  if Name <> '' then
+  begin
+    var After := '';
+    TPluginSettings.GetValueText(Name, After);
+    Res.AddPair('changed', Name);
+    Res.AddPair('from', Before);
+    Res.AddPair('to', After);
+    if Session then
+      Res.AddPair('note', Name + ' is set for THIS IDE instance only: it ' +
+        'takes effect now, the registry keeps what it had, and the value ' +
+        'is gone when the IDE closes (an unrelated save elsewhere cannot ' +
+        'make it permanent either). Call again with scope=permanent to ' +
+        'keep it.')
+    else
+      Res.AddPair('note', Name + ' is stored in the registry and applies to ' +
+        'every IDE of this version from now on. Two settings need a new ' +
+        'DelphiLSP session to take effect (LspLogging, VerifySession): ' +
+        'they are read when a session starts.');
+  end
+  else
+    Res.AddPair('note', 'Nothing was changed. Pass name + value + scope ' +
+      '("permanent" or "session") to set one. "scope" per row says where ' +
+      'the current value lives; the options page in the IDE shows the same ' +
+      'settings.');
+  Result := McpOk(Res);
+end;
+
 initialization
   RegisterMcpTool('find_unit', ToolFindUnit);
   RegisterMcpTool('add_iinterface', ToolAddIInterface);
@@ -3938,6 +4099,8 @@ initialization
   RegisterMcpTool('rename_apply', ToolRenameApply);
   RegisterMcpTool('semantic_replace', ToolSemanticReplace);
   RegisterMcpTool('move_to_new_unit', ToolMoveToNewUnit);
+  RegisterMcpTool('settings', ToolSettings);
+  RegisterMcpTool('lsp_restart', ToolLspRestart);
 
 finalization
   // before the BPL unloads - the wizard holds no IDE references of its own

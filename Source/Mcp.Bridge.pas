@@ -196,7 +196,7 @@ begin
      (AName = 'add_unit') or (AName = 'remove_unit') or
      (AName = 'extract_variable') or (AName = 'wrap_try_finally') or
      (AName = 'declare_constant') or
-     (AName = 'file_encoding') or
+     (AName = 'file_encoding') or (AName = 'settings') or
      AName.StartsWith('buffer_') or AName.StartsWith('scratch_') or
      AName.StartsWith('lsp_') or
      // the bridge's own three: they never leave this process

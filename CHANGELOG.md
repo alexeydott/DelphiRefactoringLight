@@ -6,6 +6,42 @@ development builds and were never released.
 
 ---
 
+## 2.2.0 - 2026-10-20
+
+### The settings, by name - permanently or for this IDE only
+
+The plugin's options were reachable only through its page in Tools >
+Options, which a Claude Code session cannot click. The new `settings` tool
+lists all fifteen with their current value, their default, their range or
+choices and what they do - and sets one by name. `scope` decides how long
+it holds: `permanent` writes the registry (this IDE and every one started
+later), `session` changes it for the RUNNING IDE only. There is no default
+scope on purpose: a change that may outlive the IDE is not one to guess at.
+
+"Session only" means it: the registry keeps the value it had, and a `Save`
+triggered anywhere else - the rename dialog storing its scope, the uses
+cleanup its keep list - writes that old value rather than the temporary
+one. `Save` is driven by the same descriptor the tool lists, so a setting
+can no longer be in one place and missing from the other (two hand-kept
+lists are what made the legacy migration drop five values).
+
+### `lsp_restart`
+
+Closing and reopening a project does not restart the plugin's DelphiLSP
+session, so a session that has gone wrong - typically because it loaded
+`.dcu` files instead of sources - could only be fixed by restarting the
+IDE. `lsp_restart` ends it (the verification session with it); the next
+request that needs DelphiLSP starts a fresh one.
+
+### An empty LSP answer, corrected
+
+2.1.1 said that a unit the session HAS analysed cannot be a `.dcu`
+problem. A session log then showed otherwise: hover answered at the very
+position, and the symbol's DECLARING unit had been loaded from a stale
+`.dcu`, so the compiler reported its definition without a file. Both
+causes are named now, with the log line that tells them apart
+(`definition found in file:///(-1:0)`).
+
 ## 2.1.1 - 2026-10-19
 
 ### An empty LSP answer names the right cause

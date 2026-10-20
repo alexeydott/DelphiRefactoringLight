@@ -955,6 +955,34 @@ const
     'you do not know this toolbox; a tool''s own description says how to ' +
     'CALL it.",' +
     '"inputSchema":{"type":"object","properties":{}}},' +
+    '{"name":"settings",' +
+    '"description":"Reads and writes this plugin''s own options - what ' +
+    'the options page in the IDE offers, which no session can click. ' +
+    'Without arguments it lists every setting with its current value, its ' +
+    'default, its range or choices, what it does and WHERE the current ' +
+    'value lives. With name + value + scope it sets one: ' +
+    'scope=permanent writes the registry, so it holds for this IDE and ' +
+    'every one started later; scope=session changes it for the RUNNING ' +
+    'IDE only - it takes effect at once, the registry keeps what it had, ' +
+    'and the value is gone when the IDE closes. There is deliberately no ' +
+    'default scope: a change that may outlive the IDE is not one to guess ' +
+    'at. LspLogging and VerifySession are read when a DelphiLSP session ' +
+    'STARTS, so they apply to the next one.",' +
+    '"inputSchema":{"type":"object","properties":{' +
+    '"name":{"type":"string","description":"The setting to change, as the listing names it (case-insensitive). Omit it to only list."},' +
+    '"value":{"type":"string","description":"The new value as text: true / false for a switch, a number inside its range, the text itself otherwise. Required together with name."},' +
+    '"scope":{"type":"string","description":"permanent = store it in the registry; session = this running IDE only. Required together with name."},' +
+    InstanceProp + '}}},' +
+    '{"name":"lsp_restart",' +
+    '"description":"Ends this plugin''s DelphiLSP session, so the next ' +
+    'request that needs it starts a fresh one (the verification session ' +
+    'goes with it). Closing and reopening the project does NOT restart ' +
+    'it, so this is the way to pick up something the session only reads ' +
+    'at startup - the .delphilsp.json, the library path, LspLogging - or ' +
+    'to get rid of .dcu files it has loaded instead of their sources. ' +
+    'Costs the usual cold start; get_status says when it is ready ' +
+    'again.",' +
+    '"inputSchema":{"type":"object","properties":{' + InstanceProp + '}}},' +
 
     '{"name":"get_status",' +
     '"description":"The Refactoring Light status window as data: identifier ' +
@@ -1741,25 +1769,39 @@ begin
 
   if AUnitAnalysed then
   begin
-    // The unit is fine - this POSITION is what the server does not
-    // resolve, so the .dcu story would be a wrong lead.
-    Add('The session HAS analysed this unit, so this is about the position, ' +
-      'not the unit: DelphiLSP does not resolve this symbol. A private / ' +
-      'public overload pair is the known case (Delphi 13.1, RSS-5463).');
+    // The unit we ASKED about is fine, so the silence is about the symbol -
+    // and there are exactly two causes, which only the log tells apart.
+    // MEASURED 2026-10-20: the second one produced this with hover
+    // working all along, so naming only the first would be a wrong lead
+    // (and naming only the .dcu, as before 2.1.1, was the other one).
+    Add('The session HAS analysed this unit, so this is about the symbol, ' +
+      'not about reaching the file. Two causes look identical from here: ' +
+      'DelphiLSP does not resolve this symbol (a private / public overload ' +
+      'pair is the known case - Delphi 13.1, RSS-5463), or the symbol''s ' +
+      'DECLARING unit was taken from a precompiled .dcu, and then the ' +
+      'compiler has no source position for it. The session log tells them ' +
+      'apart: a .dcu shows as "definition found in file:///(-1:0)". Switch ' +
+      '"Log this plugin''s DelphiLSP session" on (settings LspLogging, ' +
+      'next session) and read %TEMP%\DelphiLSP\RefactoringLight*.log. ' +
+      'DCUs of the project''s own units reach the session through the IDE ' +
+      'library path or through the DCU output directory its ' +
+      '.delphilsp.json names.');
     if ASuggestIndex then
-      Add('find_original_symbol answers such a case from the identifier ' +
-        'index - and for a declaration that is usually the answer you want.');
+      Add('find_original_symbol answers both cases from the identifier ' +
+        'index - for a declaration that is usually the answer you want.');
   end
   else
   begin
-    Add('The session has analysed nothing of this unit yet. When that ' +
-      'lasts, the usual cause is that the unit - or one it uses - is taken ' +
-      'from a precompiled .dcu instead of its source: DCUs of the ' +
-      'project''s own units on the IDE library path or in the DCU output ' +
-      'directory. get_status says whether the session is still loading the ' +
-      'project; to see the resolution itself, start the IDE with ' +
-      'REFACTORINGLIGHT_LSP_ARGS=-LogModes 255 (or switch the session log ' +
-      'on in the options) and read %TEMP%\DelphiLSP\Agent*.log.');
+    Add('The session has analysed nothing of this unit yet. While that ' +
+      'lasts it answers nothing for it: get_status says whether it is ' +
+      'still loading the project. When it persists, the usual cause is ' +
+      'that the unit - or one it uses - is taken from a precompiled .dcu ' +
+      'instead of its source: DCUs of the project''s own units on the IDE ' +
+      'library path or in the DCU output directory its .delphilsp.json ' +
+      'names. To see it, switch "Log this plugin''s DelphiLSP session" on ' +
+      '(settings LspLogging, next session) and read %TEMP%\DelphiLSP\' +
+      'RefactoringLight*.log - a unit taken from a .dcu answers ' +
+      '"definition found in file:///(-1:0)".');
     if ASuggestIndex then
       Add('find_original_symbol does not depend on the session for its ' +
         'last step, so it may answer anyway.');
@@ -1807,7 +1849,8 @@ begin
         '   something else. List again instead of reusing one.'
       ]),
     Sec('Where to start',
-      ['guide', 'get_status', 'ide_instances', 'select_ide'],
+      ['guide', 'get_status', 'settings', 'ide_instances',
+       'select_ide'],
       [
         'get_status is the first call when something does not work: it says',
         'whether the identifier index is ready, whether DelphiLSP answers,',
@@ -1818,6 +1861,10 @@ begin
         'session. Normally neither is needed - the target follows the file',
         'argument and the working directory - but with two IDEs open an',
         'ambiguous call is refused rather than guessed.',
+        'settings lists the plugin''s own options with their current ',
+        'values and what each one does, and sets one: permanently in the',
+        'registry or for the RUNNING IDE only. It is the options page of',
+        'the IDE as data - nothing else here can change them.',
         'guide is this text.'
       ]),
     Sec('Reading and writing a unit',
@@ -1879,7 +1926,7 @@ begin
     Sec('Asking DelphiLSP directly',
       ['lsp_hover', 'lsp_definition', 'lsp_implementation', 
        'lsp_references', 'lsp_document_symbols', 'lsp_signature_help', 
-       'lsp_completion', 'lsp_request'],
+       'lsp_completion', 'lsp_request', 'lsp_restart'],
       [
         'The raw server answers for ONE position: lsp_hover, lsp_definition,',
         'lsp_implementation, lsp_references, lsp_document_symbols,',
@@ -1891,7 +1938,11 @@ begin
         'the interface links and the source resolution that the server alone',
         'does not give. textDocument/references is not even announced by',
         'DelphiLSP, so lsp_references usually answers nothing - that is why',
-        'find_references verifies candidate by candidate.'
+        'find_references verifies candidate by candidate.',
+        'lsp_restart ends the session so the next request starts a fresh',
+        'one - the way to pick up a changed .delphilsp.json or to get rid',
+        'of .dcu files the session loaded instead of the sources. Closing',
+        'the project does not restart it.'
       ]),
     Sec('Renaming, signatures, deleting',
       ['rename_preview', 'rename_apply', 'change_signature', 
