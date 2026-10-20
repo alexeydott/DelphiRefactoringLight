@@ -6,6 +6,24 @@ development builds and were never released.
 
 ---
 
+## 2.3.0 - 2026-10-20
+
+### The project itself: open it, close it, add and remove files
+
+`project_open` opens a project or a project group, `project_close` closes
+the group and every open file (the IDE has no "close only the project"),
+and `project_files` lists what the project carries and adds or removes
+entries.
+
+The guards are the point, not the calls. Both open and close REFUSE while
+anything is unsaved and name the files, because the IDE would ask about
+them - and a question nobody can answer blocks the call instead of
+reaching a human; `save_modified=true` decides it up front. `project_files`
+takes `apply` like every other writing tool: the project file is not an
+editor buffer, so a change to it is not undoable with Ctrl+Z. Adding a
+file does not create or open it, removing one does not delete it from
+disk, and the `.dproj` is written unless `save=false`.
+
 ## 2.2.0 - 2026-10-20
 
 ### The settings, by name - permanently or for this IDE only

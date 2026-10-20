@@ -983,6 +983,46 @@ const
     'Costs the usual cold start; get_status says when it is ready ' +
     'again.",' +
     '"inputSchema":{"type":"object","properties":{' + InstanceProp + '}}},' +
+    '{"name":"project_open",' +
+    '"description":"Opens a project (.dproj / .dpk) or a project group ' +
+    'in the IDE. Opening one closes what is open, so unsaved work is ' +
+    'decided BEFORE: with save_modified=false (the default) the call is ' +
+    'REFUSED and names the modified files, because the IDE would ask and ' +
+    'nobody can answer that question through a pipe. The identifier ' +
+    'index and the DelphiLSP session follow a switch by themselves but ' +
+    'need time (get_status), and a session that was already running ' +
+    'keeps answering for the old project until lsp_restart.",' +
+    '"inputSchema":{"type":"object","properties":{' +
+    '"file":{"type":"string","description":"Absolute path of the .dproj, .dpk, .dpr or .groupproj."},' +
+    '"new_group":{"type":"boolean","description":"Open it in a NEW project group (default false: it joins the current group the way the IDE does it)."},' +
+    '"save_modified":{"type":"boolean","description":"Save every modified file first (default false = refuse while anything is unsaved)."},' +
+    InstanceProp + '},"required":["file"]}},' +
+
+    '{"name":"project_close",' +
+    '"description":"Closes the project group and every open file - what ' +
+    'File > Close All does, because the IDE has no \"close only the ' +
+    'project\". Unsaved work is decided the same way as for ' +
+    'project_open: refused unless save_modified=true. Our DelphiLSP ' +
+    'session is not ended by it (lsp_restart does that), and without a ' +
+    'project most other tools have nothing to work on.",' +
+    '"inputSchema":{"type":"object","properties":{' +
+    '"save_modified":{"type":"boolean","description":"Save every modified file first (default false = refuse while anything is unsaved)."},' +
+    InstanceProp + '}}},' +
+
+    '{"name":"project_files",' +
+    '"description":"The files the active project lists, and adding or ' +
+    'removing some. Without add / remove it only lists (unit and form ' +
+    'name per entry). add takes paths that must EXIST - adding does not ' +
+    'create a file and does not open it; remove takes paths the project ' +
+    'lists - removing does not delete anything from disk. One call can ' +
+    'do both, and \"changes\" says per file what happened or what ' +
+    'would. The project FILE is not an editor buffer: a change to it is ' +
+    'not undoable with Ctrl+Z, which is why it takes apply.",' +
+    '"inputSchema":{"type":"object","properties":{' +
+    '"add":{"type":"array","items":{"type":"string"},"description":"Paths to add to the project."},' +
+    '"remove":{"type":"array","items":{"type":"string"},"description":"Paths to remove from the project."},' +
+    '"save":{"type":"boolean","description":"Write the project file afterwards (default true). With false the change lives in the IDE''s model only and the IDE asks when the project closes."},' +
+    ApplyFreshProp + ',' + InstanceProp + '}}},' +
 
     '{"name":"get_status",' +
     '"description":"The Refactoring Light status window as data: identifier ' +
@@ -1884,6 +1924,20 @@ begin
         'scratch_analyze hands DelphiLSP a unit that exists only in memory and',
         'returns its diagnostics and quick fixes - the way to try something',
         'without touching the project; scratch_close drops it again.'
+      ]),
+    Sec('The project itself',
+      ['project_open', 'project_close', 'project_files'],
+      [
+        'project_open opens a project or project group, project_close closes',
+        'the group and every open file (the IDE has no "close only the',
+        'project"). Both REFUSE while anything is unsaved and name the files:',
+        'the IDE would ask, and nobody can answer that through a pipe - pass',
+        'save_modified=true to save them first.',
+        'project_files lists what the project carries and adds or removes',
+        'entries. Adding does not create or open a file, removing does not',
+        'delete one, and the project file is written unless you say',
+        'save=false. After a switch, get_status says when the index and the',
+        'LSP session have caught up.'
       ]),
     Sec('Errors and quick fixes',
       ['get_diagnostics', 'get_quick_fixes', 'apply_quick_fix', 

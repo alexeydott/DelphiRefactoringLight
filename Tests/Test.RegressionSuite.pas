@@ -192,6 +192,13 @@ type
     ///  2.0.6's own regression: the tool's sentence and the generic text
     ///  both opened with "DelphiLSP returned nothing".</summary>
     [Test] procedure AnEmptyAnswerNamesTheRightCause;
+    /// <summary>Opening or closing a project throws away unsaved work when
+    ///  nobody is asked - and the IDE's own question cannot be answered
+    ///  through a pipe, it only blocks the call. Both tools therefore have
+    ///  to OFFER the decision and say that they refuse without it, and the
+    ///  file list has to be a reviewable change like every other write.
+    ///  </summary>
+    [Test] procedure AProjectActionSaysWhatHappensToUnsavedWork;
   end;
 
   /// <summary>Issue #13: while DelphiLSP loads a big project (12-30 s) its
@@ -1742,6 +1749,58 @@ begin
 
   Assert.AreEqual('', Bad, Bad);
   Assert.IsTrue(Props > 200, 'every parameter of every tool was looked at');
+end;
+
+procedure TMcpPipeRegressionTests.AProjectActionSaysWhatHappensToUnsavedWork;
+
+  function Tool(AArr: TJSONArray; const AName: string): TJSONObject;
+  begin
+    Result := nil;
+    for var V in AArr do
+      if SameText((V as TJSONObject).GetValue<string>('name', ''), AName) then
+        Exit(V as TJSONObject);
+  end;
+
+  function Props(AArr: TJSONArray; const AName: string): TJSONObject;
+  begin
+    Result := nil;
+    var T := Tool(AArr, AName);
+    if T = nil then Exit;
+    var S := T.GetValue<TJSONObject>('inputSchema', nil);
+    if S <> nil then Result := S.GetValue<TJSONObject>('properties', nil);
+  end;
+
+begin
+  var Arr := McpToolDefinitions;
+  try
+    for var N in ['project_open', 'project_close'] do
+    begin
+      var T := Tool(Arr, N);
+      Assert.IsNotNull(T, N + ' is a tool of this server');
+      var P := Props(Arr, N);
+      Assert.IsNotNull(P, N + ' has a schema');
+      Assert.IsNotNull(P.GetValue<TJSONObject>('save_modified', nil),
+        N + ' must OFFER what happens to unsaved work');
+      var D := T.GetValue<string>('description', '');
+      Assert.IsTrue(D.ToLower.Contains('refuse'),
+        N + ' must say that it refuses while something is unsaved: ' + D);
+      Assert.IsTrue(D.ToLower.Contains('unsaved'),
+        N + ' must name unsaved work: ' + D);
+    end;
+
+    // The project file is not a buffer: no Ctrl+Z, so it is a reviewable
+    // change like every other write - and saving it is a choice.
+    var PF := Props(Arr, 'project_files');
+    Assert.IsNotNull(PF, 'project_files has a schema');
+    for var A in ['add', 'remove', 'apply', 'save'] do
+      Assert.IsNotNull(PF.GetValue<TJSONObject>(A, nil),
+        'project_files declares "' + A + '"');
+    var FD := Tool(Arr, 'project_files').GetValue<string>('description', '');
+    Assert.IsTrue(FD.Contains('Ctrl+Z'),
+      'and says why it needs apply at all: ' + FD);
+  finally
+    Arr.Free;
+  end;
 end;
 
 procedure TMcpPipeRegressionTests.AnEmptyAnswerNamesTheRightCause;

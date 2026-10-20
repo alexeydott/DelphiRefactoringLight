@@ -186,7 +186,8 @@ begin
      (AName = 'add_iinterface') or (AName = 'get_quick_fixes') or
      (AName = 'convert_properties') or (AName = 'expand_includes') or
      (AName = 'edit_method') or (AName = 'line_endings') or
-     (AName = 'unused_units') then
+     (AName = 'unused_units') or (AName = 'project_open') or
+     (AName = 'project_close') then
     Exit(twLong);
 
   // Reads, single-buffer edits and single LSP requests - the IDE answers
@@ -197,6 +198,7 @@ begin
      (AName = 'extract_variable') or (AName = 'wrap_try_finally') or
      (AName = 'declare_constant') or
      (AName = 'file_encoding') or (AName = 'settings') or
+     (AName = 'project_files') or
      AName.StartsWith('buffer_') or AName.StartsWith('scratch_') or
      AName.StartsWith('lsp_') or
      // the bridge's own three: they never leave this process
