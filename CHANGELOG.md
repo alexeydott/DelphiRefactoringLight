@@ -33,6 +33,25 @@ targets are reachable from the keyboard. Nothing changed for the MCP tools:
 `move_to_unit` and `move_to_new_unit` each name their target explicitly and
 both stay.
 
+### `lsp_restart` starts a session again - and says so only when it did
+
+`lsp_restart` ends the DelphiLSP session and starts a new one, because the
+`lsp_*` tools never cold-start one by themselves. The starting half went
+through the path the IDE's own project-open notifier uses - and that one
+debounces re-opens of the **same** project and honours the "prewarm on
+project open" setting. So for the project that is already open it did
+nothing at all, while the answer still reported `restarted: true`, because
+the call had not raised. What was left was a plugin without a session:
+every `lsp_*` tool and `find_references` refused until the IDE itself was
+restarted.
+
+The restart has its own path now: no debounce, no prewarm setting, and
+`restarted` is true only when a start really began. A start that was
+already running is not raced - the request is parked and runs when that one
+has finished, and the answer says `queued`. Where nothing started at all,
+`reason` names it: `start_again=false`, no project, no `.delphilsp.json`,
+no source files, or the plugin is shutting down.
+
 ---
 
 ## 2.5.2 - 2026-10-20
