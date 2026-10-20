@@ -4468,6 +4468,23 @@ const
   Done = 'carry a fresh GUID now';
   Where = 'in the IDE buffer when the file was open (not saved)';
 begin
+  // The same rule for what an answer OFFERS. Measured live (2.5.1):
+  // with a complete DCU output the check found no such finding at all
+  // and still ended with "A "LSP reads a DCU" finding can be fixed
+  // from here" - and since 2.5.0 only a stale .dcu whose source the
+  // compiler can reach instead is movable, so the sentence was wrong
+  // in both directions.
+  Assert.AreEqual('', DebugFixOfferNote(0),
+    'nothing fixable means the answer offers nothing');
+  Assert.AreEqual('', DebugFixOfferNote(-1), 'and a bad count too');
+  var Offer := DebugFixOfferNote(3);
+  Assert.IsTrue(Offer.StartsWith('3 finding(s)'),
+    'and with three of them it says how many: ' + Offer);
+  Assert.IsTrue(Offer.Contains('older than its source'),
+    'naming WHICH finding has that cure: ' + Offer);
+  Assert.IsTrue(Offer.Contains('is a build'),
+    'and that the others have another one: ' + Offer);
+
   // The measured case: apply=true with one id that matches no finding.
   // Nothing happened, so the note may not say the opposite.
   var Nothing := AppliedByIdsNote(0, 0, 1, Thing, Done, Where);

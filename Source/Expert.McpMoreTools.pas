@@ -1520,15 +1520,24 @@ begin
       ' The LSP session does not notice by itself: lsp_restart makes the ' +
       'next request start a session that reads the sources.');
   end
-  else if Arr.Count < Length(Issues) then
-    Res.AddPair('note', Format('%d of %d issues listed (problems first) - ' +
-      'pass "max" (0 = all) for more. A "LSP reads a DCU" finding can be ' +
-      'fixed from here: apply=true with its id moves the .dcu aside.',
-      [Arr.Count, Length(Issues)]))
   else
-    Res.AddPair('note', 'A "LSP reads a DCU" finding can be fixed from ' +
-      'here: apply=true with its id moves the .dcu into a subdirectory, ' +
-      'so DelphiLSP reads the source again (lsp_restart afterwards).');
+  begin
+    // What may be said about fixing comes from the findings themselves -
+    // a complete DCU output yields none of them, and most of those that
+    // exist have a build as their cure, not a move (measured live, 2.5.1).
+    var Fixable := 0;
+    for var I in Issues do
+      if (I.Kind = dkLspDcu) and I.Fixable then Inc(Fixable);
+    var Tail := DebugFixOfferNote(Fixable);
+    if Arr.Count < Length(Issues) then
+      Tail := Format('%d of %d issues listed (problems first) - pass ' +
+        '"max" (0 = all) for more.', [Arr.Count, Length(Issues)]) +
+        IfThen(Tail <> '', ' ' + Tail)
+    else if Tail = '' then
+      Tail := Format('%d finding(s), and none of them has a fix this tool ' +
+        'can apply.', [Length(Issues)]);
+    Res.AddPair('note', Tail);
+  end;
   Result := McpOk(Res);
   finally
     Moved.Free;

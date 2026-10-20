@@ -6,6 +6,25 @@ development builds and were never released.
 
 ---
 
+## 2.5.2 - 2026-10-20
+
+### The answer stops offering a fix it does not have
+
+With the DCU output complete the check reports no "LSP reads a DCU"
+finding at all - and its answer still ended with "a finding can be fixed
+from here: apply=true with its id moves the .dcu aside". That sentence was
+a constant, and since 2.5.0 it is wrong in the other direction as well:
+only a `.dcu` that is older than its source **and** whose source the
+compiler could use instead has that cure; for every other finding of that
+kind the cure is a build, which is what the rows say and what `apply`
+answers when they are named.
+
+The tail is derived from the findings now - it says how many carry that
+cure, which finding has it, and that the others name their own; and with
+none of them it says nothing about a fix.
+
+---
+
 ## 2.5.1 - 2026-10-20
 
 ### What the first live run of the new DCU check reported

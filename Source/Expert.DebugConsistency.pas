@@ -332,6 +332,17 @@ function SelectReportRows(const AIds, AActedIds: TArray<string>;
 /// <summary>Ids the caller named that no finding carries. Shared.</summary>
 function UnknownReportIds(const AIds, ANamed: TArray<string>): TArray<string>;
 
+/// <summary>What the answer of the debug-consistency check may say about
+///  fixing, derived from the findings it really has. AFixable is how many
+///  of them carry a cure this tool can apply. MEASURED LIVE (2.5.1): with
+///  a complete DCU output the check finds nothing of that kind and the
+///  answer still ended with "a finding can be fixed from here" - and since
+///  2.5.0 only a STALE .dcu whose source the compiler can reach instead is
+///  movable at all, so promising it for every finding of that kind is the
+///  other half of the same wrong sentence. '' = say nothing about a
+///  fix.</summary>
+function DebugFixOfferNote(AFixable: Integer): string;
+
 /// <summary>What an apply by ids really DID, as one sentence - derived,
 ///  never asserted. Measured live (2.0.4): interface_guids answered "the
 ///  declarations you named carry a fresh GUID now" after an apply in which
@@ -1095,6 +1106,17 @@ begin
       end;
     if not Known then Result := Result + [Name];
   end;
+end;
+
+function DebugFixOfferNote(AFixable: Integer): string;
+begin
+  if AFixable <= 0 then Exit('');
+  Result := Format('%d finding(s) of this scan carry a cure this tool can ' +
+    'apply: a .dcu that is older than its source AND whose source the ' +
+    'compiler could use instead - apply=true with such an id moves that ' +
+    '.dcu into a subdirectory, so DelphiLSP reads the source again ' +
+    '(lsp_restart afterwards). Every other finding names its own cure, ' +
+    'which is a build.', [AFixable]);
 end;
 
 function AppliedByIdsNote(ADone, AFailed, AUnknown: Integer;
