@@ -91,6 +91,8 @@ type
     [Test] procedure LspUri_DrivePathWithUmlautRoundTrips;
     [Test] procedure BackupPath_MirrorsTheFullPath;
     [Test] procedure VcsOutput_MixedUtf8AndAnsiLines;
+    [Test] procedure VcsOutput_MixedUtf8AndAnsiLastLine;
+    [Test] procedure VcsOutput_Utf8RespectsByteCount;
     [Test] procedure WorkerLatch_WaitsAndRefusesAfterShutdown;
     /// <summary>Audit #38, L1g: the worker COUNT drops in the closure's
     ///  finally - before the closure epilogue releases what it captured and
@@ -1116,15 +1118,46 @@ end;
 
 procedure TMiscRegressionTests.VcsOutput_MixedUtf8AndAnsiLines;
 var
-  All: TBytes;
+  All, AnsiLine: TBytes;
 begin
-  // a diff reproduces the BYTES of the files - a cp1252 source inside UTF-8
-  // git output raised EEncodingError
+  // A diff reproduces source BYTES. Do not encode German text through ANSI:
+  // on a cp1251 Windows installation that loses characters before the test.
+  // These bytes are invalid UTF-8; their ANSI meaning depends on Windows.
+  AnsiLine := TBytes.Create($2B, $20, $20, $47, $72, $F6, $DF, $65,
+    $20, $3A, $3D, $20, $31, $3B, $0A);
   All := TEncoding.UTF8.GetBytes('Author: J' + #$00E4 + 'nicke' + #10) +
-    TEncoding.ANSI.GetBytes('+  Gr' + #$00F6 + #$00DF + 'e := 1;' + #10) +
+    AnsiLine +
     TEncoding.UTF8.GetBytes('@@ ' + #$00FC + ' @@');
-  Assert.AreEqual('Author: J' + #$00E4 + 'nicke' + #10 + '+  Gr' + #$00F6 + #$00DF +
-    'e := 1;' + #10 + '@@ ' + #$00FC + ' @@', DecodeVcsOutput(All, Length(All)));
+  Assert.AreEqual('Author: J' + #$00E4 + 'nicke' + #10 +
+    TEncoding.ANSI.GetString(AnsiLine) + '@@ ' + #$00FC + ' @@',
+    DecodeVcsOutput(All, Length(All)));
+end;
+
+procedure TMiscRegressionTests.VcsOutput_MixedUtf8AndAnsiLastLine;
+var
+  All, AnsiLine: TBytes;
+  Header: string;
+begin
+  Header := 'Author: ' + #$0410 + #$043B + #$0435 + #$043A + #$0441 + #13#10;
+  AnsiLine := TBytes.Create($2B, $20, $E0, $FF); // no final newline
+  All := TEncoding.UTF8.GetBytes(Header) + AnsiLine;
+  Assert.AreEqual(Header + TEncoding.ANSI.GetString(AnsiLine),
+    DecodeVcsOutput(All, Length(All)));
+end;
+
+procedure TMiscRegressionTests.VcsOutput_Utf8RespectsByteCount;
+var
+  All: TBytes;
+  Text: string;
+  Count: Integer;
+begin
+  Text := #$041F + #$0440 + #$0438 + #$0432 + #$0435 + #$0442 +
+    ' ' + #$D83D + #$DE80 + #13#10;
+  All := TEncoding.UTF8.GetBytes(Text);
+  Count := Length(All);
+  All := All + TBytes.Create($FF, $FE); // unread buffer capacity is not output
+  Assert.AreEqual(Text, DecodeVcsOutput(All, Count));
+  Assert.AreEqual('', DecodeVcsOutput(All, 0));
 end;
 
 procedure TMiscRegressionTests.WorkerLatch_WaitsAndRefusesAfterShutdown;
