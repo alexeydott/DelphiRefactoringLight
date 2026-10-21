@@ -3,7 +3,7 @@
         <ProjectGuid>{3533596D-3A94-4D48-9FB1-A3EA4C4BF845}</ProjectGuid>
         <MainSource>RefactoringLightStandalone.dpr</MainSource>
         <Base>True</Base>
-        <Config Condition="'$(Config)'==''">Debug</Config>
+        <Config Condition="'$(Config)'==''">Release</Config>
         <ProjectName Condition="'$(ProjectName)'==''">RefactoringLightStandalone</ProjectName>
         <TargetedPlatforms>1</TargetedPlatforms>
         <AppType>Application</AppType>
@@ -70,6 +70,8 @@
         <Manifest_File>$(BDS)\bin\default_app.manifest</Manifest_File>
         <UWP_DelphiLogo44>$(BDS)\bin\Artwork\Windows\UWP\delphi_UwpDefault_44.png</UWP_DelphiLogo44>
         <UWP_DelphiLogo150>$(BDS)\bin\Artwork\Windows\UWP\delphi_UwpDefault_150.png</UWP_DelphiLogo150>
+        <DCC_UnitSearchPath>..\Source;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <AppDPIAwarenessMode>none</AppDPIAwarenessMode>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Win64)'!=''">
         <UWP_DelphiLogo44>$(BDS)\bin\Artwork\Windows\UWP\delphi_UwpDefault_44.png</UWP_DelphiLogo44>
@@ -83,6 +85,9 @@
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_1_Win32)'!=''">
         <AppDPIAwarenessMode>PerMonitorV2</AppDPIAwarenessMode>
+        <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
+        <VerInfo_Locale>1033</VerInfo_Locale>
+        <VerInfo_Keys>CompanyName=;FileDescription=$(MSBuildProjectName);FileVersion=1.0.0.0;InternalName=;LegalCopyright=;LegalTrademarks=;OriginalFilename=;ProgramID=com.embarcadero.$(MSBuildProjectName);ProductName=$(MSBuildProjectName);ProductVersion=1.0.0.0;Comments=</VerInfo_Keys>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_2)'!=''">
         <DCC_Define>DEBUG;$(DCC_Define)</DCC_Define>
@@ -104,7 +109,6 @@
         <DCCReference Include="Standalone.MainForm.pas"/>
         <DCCReference Include="Standalone.EditorHelper.pas"/>
         <DCCReference Include="..\Source\Expert.EditorHelperIntf.pas"/>
-        <DCCReference Include="..\Source\Expert.UnitUsageProbe.pas"/>
         <DCCReference Include="..\Source\Delphi.FileEncoding.pas"/>
         <DCCReference Include="..\Source\Expert.SemanticReplace.pas"/>
         <DCCReference Include="..\Source\Expert.SemanticReplaceDialogs.pas"/>
@@ -128,6 +132,19 @@
         <DCCReference Include="..\Source\Expert.InterfaceGuidDialog.pas"/>
         <DCCReference Include="..\Source\Expert.UsesGraph.pas"/>
         <DCCReference Include="..\Source\Expert.CircularRefsDialog.pas"/>
+        <DCCReference Include="..\Source\Expert.UsesEditor.pas"/>
+        <DCCReference Include="..\Source\Expert.UnitIndex.pas"/>
+        <DCCReference Include="..\Source\Expert.ResourceMonitor.pas"/>
+        <DCCReference Include="..\Source\Expert.ScopeFiles.pas"/>
+        <DCCReference Include="..\Source\Expert.DfmRename.pas"/>
+        <DCCReference Include="..\Source\Expert.EventGen.pas"/>
+        <DCCReference Include="..\Source\Expert.PluginSettings.pas"/>
+        <DCCReference Include="..\Source\Expert.UnitUsageProbe.pas"/>
+        <DCCReference Include="..\Source\Expert.FindUnitDialog.pas"/>
+        <DCCReference Include="..\Source\Expert.AutoImport.pas"/>
+        <DCCReference Include="..\Source\Expert.DiagStore.pas"/>
+        <DCCReference Include="..\Source\Expert.FindOriginalSymbolWizard.pas"/>
+        <DCCReference Include="..\Source\Expert.UsesCleanup.pas"/>
         <DCCReference Include="..\Source\Expert.RenameDialog.pas"/>
         <DCCReference Include="..\Source\Lsp.Protocol.pas"/>
         <DCCReference Include="..\Source\Expert.ExtractInterface.pas"/>
@@ -181,11 +198,6 @@
                 <Source>
                     <Source Name="MainSource">RefactoringLightStandalone.dpr</Source>
                 </Source>
-                <Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\dcloffice2k370.bpl">Microsoft Office 2000 Sample Automation Server Wrapper Components</Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\dclofficexp370.bpl">Microsoft Office XP Sample Automation Server Wrapper Components</Excluded_Packages>
-                    <Excluded_Packages Name="C:\Users\Public\Documents\Embarcadero\Studio\37.0\Bpl\DelphiRefactoringLight.bpl">File C:\Users\Public\Documents\Embarcadero\Studio\37.0\Bpl\DelphiRefactoringLight.bpl not found</Excluded_Packages>
-                </Excluded_Packages>
             </Delphi.Personality>
             <Platforms>
                 <Platform value="Win32">True</Platform>

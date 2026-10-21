@@ -6,7 +6,7 @@ setlocal
 :: Builds delinst.exe (DIH), then builds the package without modifying the IDE
 :: ============================================================================
 
-set BDSVER=37.0
+set BDSVER=23.0
 set DELINST=%~dp0delinst.exe
 set DIHCONFIG=%~dp0DelphiRefactoringLight.xml
 set USEBDS=
