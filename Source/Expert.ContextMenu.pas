@@ -851,6 +851,12 @@ begin
 end;
 
 function TContextMenuInstaller.TryInstallLocalMenu: Boolean;
+{$IF CompilerVersion < 36.0}
+begin
+  // Use the existing popup hook on IDEs without INTAEditorLocalMenu.
+  Result := False;
+end;
+{$ELSE}
 // The OFFICIAL way to extend the editor popup (Delphi 12+): register a
 // TActionList under our own category, inserted after the IDE's Refactor
 // category. The IDE rebuilds the menu on every popup and calls each
@@ -921,6 +927,8 @@ begin
     end;
   end;
 end;
+
+{$ENDIF}
 
 procedure TContextMenuInstaller.BuildLocalMenuActions(AParent: TMenuItem;
   const ACat, APrefix: string);
@@ -1020,12 +1028,15 @@ begin
 end;
 
 procedure TContextMenuInstaller.RemoveLocalMenu;
+{$IF CompilerVersion >= 36.0}
 var
   ES: IOTAEditorServices;
   LocalMenu: INTAEditorLocalMenu;
+{$ENDIF}
 begin
   if not FLocalMenuOk then Exit;
   FLocalMenuOk := False;
+{$IF CompilerVersion >= 36.0}
   // MANDATORY before the BPL unloads (documented in the ToolsAPI).
   try
     if Supports(BorlandIDEServices, IOTAEditorServices, ES) then
@@ -1037,6 +1048,7 @@ begin
   except
     // IDE shutting down - nothing left to unregister
   end;
+{$ENDIF}
   FLocalMenuActions := nil;
   FreeAndNil(FLocalMenuOwner);   // frees the mirror tree + its actions
   if FActReq <> nil then FActReq.Clear;

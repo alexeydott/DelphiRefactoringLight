@@ -1781,6 +1781,7 @@ end;
 
 function ToolSemanticReplace(AArgs: TJSONObject; AStop: THandle): string;
 var
+  Counts: array[TMatchVerdict] of Integer;
   Err, RulesPath, LoadErr: string;
   Rules: TArray<TSemanticReplaceRule>;
   Files: TArray<string>;
@@ -1843,7 +1844,6 @@ begin
     RA.Add(O);
   end;
   Res.AddPair('rules', RA);
-  var Counts: array[TMatchVerdict] of Integer;
   for var V := Low(TMatchVerdict) to High(TMatchVerdict) do Counts[V] := 0;
   var MA := TJSONArray.Create;
   var Rows := 0;

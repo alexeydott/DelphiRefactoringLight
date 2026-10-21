@@ -331,6 +331,17 @@ begin
   if not Supports(BorlandIDEServices, IOTAModuleServices, ModuleServices) then
     Exit;
 
+  // In Delphi 11 the main project group need not occur in Modules[].
+  // Use the module service's authoritative group before enumerating modules.
+  ProjectGroup := ModuleServices.MainProjectGroup;
+  if ProjectGroup <> nil then
+  begin
+    Project := ProjectGroup.ActiveProject;
+    if Project <> nil then Exit(Project.FileName);
+  end;
+  Project := ModuleServices.GetActiveProject;
+  if Project <> nil then Exit(Project.FileName);
+
   // Aktives Projekt suchen
   for I := 0 to ModuleServices.ModuleCount - 1 do
   begin
@@ -1169,6 +1180,42 @@ begin
   end;
 end;
 
+{$IF CompilerVersion < 36.0}
+// Delphi 11 has only the byte-oriented writer API. Release the reader
+// before opening an undoable writer, and keep the original line ending.
+function EditLineCompat(const AEditor: IOTASourceEditor; ALine: Integer;
+  const AContent: string; ADelete: Boolean): Boolean;
+var
+  Buf: TBytes;
+  Count, StartPos, EndPos, Beyond: Integer;
+  Writer: IOTAEditWriter;
+begin
+  Result := False;
+  if ALine < 1 then Exit;
+  Count := ReadWholeEditorBuffer(AEditor, Buf);
+  if Count < 0 then Exit;
+  if not BufferOffsetOf(Buf, Count, ALine - 1, 0, StartPos, Beyond) then Exit;
+  EndPos := StartPos;
+  while (EndPos < Count) and (Buf[EndPos] <> 13) and (Buf[EndPos] <> 10) do
+    Inc(EndPos);
+  if ADelete then
+  begin
+    if (EndPos < Count) and (Buf[EndPos] = 13) then Inc(EndPos);
+    if (EndPos < Count) and (Buf[EndPos] = 10) then Inc(EndPos);
+  end;
+  Writer := AEditor.CreateUndoableWriter;
+  if Writer = nil then Exit;
+  try
+    Writer.CopyTo(StartPos);
+    Writer.DeleteTo(EndPos);
+    if not ADelete then Writer.Insert(PAnsiChar(UTF8Encode(AContent)));
+  finally
+    Writer := nil;
+  end;
+  Result := True;
+end;
+{$ENDIF}
+
 function TIDEEditorHelper.ReplaceLineAt(const AFilePath: string;
   ALine: Integer; const ANewContent: string): Boolean;
 var
@@ -1198,6 +1245,9 @@ begin
     end;
   if SourceEditor = nil then Exit;
 
+{$IF CompilerVersion < 36.0}
+  Exit(EditLineCompat(SourceEditor, ALine, ANewContent, False));
+{$ELSE}
   Writer := SourceEditor.CreateUndoableWriter;
   if Writer = nil then Exit;
   try
@@ -1206,6 +1256,7 @@ begin
     Writer := nil;
   end;
   Result := True;
+{$ENDIF}
 end;
 
 function TIDEEditorHelper.DeleteLineAt(const AFilePath: string;
@@ -1237,6 +1288,9 @@ begin
     end;
   if SourceEditor = nil then Exit;
 
+{$IF CompilerVersion < 36.0}
+  Exit(EditLineCompat(SourceEditor, ALine, '', True));
+{$ELSE}
   Writer := SourceEditor.CreateUndoableWriter;
   if Writer = nil then Exit;
   try
@@ -1245,6 +1299,7 @@ begin
     Writer := nil;
   end;
   Result := True;
+{$ENDIF}
 end;
 
 function TIDEEditorHelper.ReadEditorContent(const AFilePath: string;
@@ -1388,13 +1443,20 @@ begin
       Exit(nil);
 
     // Aktives Projekt finden
-    Project := nil;
-    for I := 0 to ModuleServices.ModuleCount - 1 do
-    begin
-      if Supports(ModuleServices.Modules[I], IOTAProjectGroup, ProjectGroup) then
-      begin
+    Project := ModuleServices.GetActiveProject;
+    ProjectGroup := ModuleServices.MainProjectGroup;
+    if ProjectGroup <> nil then
+      if ProjectGroup.ActiveProject <> nil then
         Project := ProjectGroup.ActiveProject;
-        Break;
+    if Project = nil then
+    begin
+      for I := 0 to ModuleServices.ModuleCount - 1 do
+      begin
+        if Supports(ModuleServices.Modules[I], IOTAProjectGroup, ProjectGroup) then
+        begin
+          Project := ProjectGroup.ActiveProject;
+          Break;
+        end;
       end;
     end;
 
