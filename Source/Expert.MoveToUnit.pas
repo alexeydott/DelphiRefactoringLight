@@ -215,6 +215,23 @@ function EmptyUnitText(const AUnitName: string): string;
 /// <summary>'' when AName is a valid (dotted) unit name, else why not.</summary>
 function CheckNewUnitName(const AName: string): string;
 
+/// <summary>The name a NEW unit for ASymbol usually gets - the
+///  one-class-per-unit convention drops a leading 'T' ("TCustomerList" ->
+///  "CustomerList"), and anything else is taken as it is. Pure.</summary>
+function SuggestedNewUnitName(const ASymbol: string): string;
+
+/// <summary>The file a move into a NEW unit would create for what the user
+///  typed: a bare name is created next to ASourceFile, a '.pas' extension
+///  is accepted, and so is a path - a rooted one as it stands, a relative
+///  one against ASourceFile's own folder (never against the process's
+///  working directory, which is nothing the user can see). '' with AProblem set when that
+///  cannot become a new unit - the name is none, the folder a typed path
+///  names is not there, or a file is, in which case moving into it as an
+///  EXISTING unit is the answer. Those are the refusals ExecuteToNewUnit
+///  makes too, so a dialog may offer exactly what the move accepts.</summary>
+function PlanNewUnitFile(const AName, ASourceFile: string;
+  out AProblem: string): string;
+
 implementation
 
 { Helpers (file-local) }
@@ -2336,6 +2353,57 @@ begin
   end;
 end;
 
+function SuggestedNewUnitName(const ASymbol: string): string;
+begin
+  Result := Trim(ASymbol);
+  if (Length(Result) > 1) and (Result[1] = 'T') and
+     CharInSet(Result[2], ['A'..'Z']) then
+    Result := Copy(Result, 2, MaxInt);
+end;
+
+function PlanNewUnitFile(const AName, ASourceFile: string;
+  out AProblem: string): string;
+begin
+  Result := '';
+  var N := Trim(AName);
+  if SameText(ExtractFileExt(N), '.pas') then N := ChangeFileExt(N, '');
+  // the NAME is the last dotted segment's file name - 'My.Unit' is a unit
+  // name, 'C:\dir\My.Unit' is the same name in another folder
+  AProblem := CheckNewUnitName(ExtractFileName(N));
+  if AProblem <> '' then Exit;
+  var Dir := ExtractFilePath(N);
+  if Dir = '' then
+    Result := ExtractFilePath(ASourceFile) + N + '.pas'
+  else if (Pos(':', Dir) > 0) or Dir.StartsWith('\') then
+    Result := N + '.pas'          // a drive, a UNC path or a rooted one
+  else
+    // "sub\Customer" means next to the SOURCE UNIT. Resolving it against
+    // the process's working directory (which a file dialog moves during a
+    // session) put the new unit somewhere nobody chose.
+    Result := ExpandFileName(ExtractFilePath(ASourceFile) + N) + '.pas';
+  if not DirectoryExists(ExtractFileDir(Result)) then
+  begin
+    AProblem := 'the folder does not exist: ' + ExtractFileDir(Result);
+    Result := '';
+    Exit;
+  end;
+  if SameText(ExpandFileName(Result), ExpandFileName(ASourceFile)) then
+  begin
+    // the FIRST thing the dialog offers for TCustomer in Customer.pas is
+    // "Customer" - and "move into it as an existing unit" is impossible
+    // advice there (BuildPlan refuses source = target)
+    AProblem := 'that is the unit you are moving out of';
+    Result := '';
+    Exit;
+  end;
+  if FileExists(Result) then
+  begin
+    AProblem := ExtractFileName(Result) + ' already exists - move into it as ' +
+      'an existing unit instead';
+    Result := '';
+  end;
+end;
+
 class function TLspMoveToUnit.ExecuteToNewUnit(const ASymbol, ASourceFile,
   ANewFile: string; out AError: string): Boolean;
 var
@@ -2401,7 +2469,16 @@ begin
            UnitNameOfFile(ASourceFile), UnitNameOfFile(ASourceFile), ASymbol]);
         Exit;
       end;
-    end;
+    end
+    else
+      // WHAT WAS NOT DECIDED, said out loud: without a session that
+      // question cannot be answered at all, and the move goes ahead. The
+      // callers report AError beside their success (the menu path as a
+      // message, the MCP tool as its "note").
+      AError := Format('DelphiLSP could not be reached here, so whether the ' +
+        'declaration of %s needs %s itself was NOT checked. If it does, the ' +
+        'new unit will not compile - those declarations have to move ' +
+        'together then.', [ASymbol, UnitNameOfFile(ASourceFile)]);
     APlan := Plan;
     if APreview then
     begin
@@ -2422,8 +2499,10 @@ begin
     end;
     Keep := True;
     if not Editor.AddFileToActiveProject(ANewFile) then
-      AError := 'moved, but ' + ExtractFileName(ANewFile) + ' could not be added to ' +
-        'the project - add it yourself';
+      // appended: a note about what could not be CHECKED must not be lost
+      // because something else also needs saying
+      AError := Trim(AError + ' moved, but ' + ExtractFileName(ANewFile) +
+        ' could not be added to the project - add it yourself');
   finally
     // nothing happened: the empty file must not stay behind
     if not Keep then

@@ -277,14 +277,22 @@ type
 
 var
   /// <summary>Turn a violation into an exception instead of a counter.
-  ///  Still OFF by default: the three MCP tools that broke the rule
+  ///  ON since 2.0, and the flip had a condition. 1.16.3 shipped this as a
+  ///  counter because the three MCP tools that broke the rule
   ///  (extract_variable, wrap_try_finally, cleanup_uses - they wrote from
-  ///  the pipe handler thread) write through McpRunOnMain since 1.16.29,
-  ///  but that was found by RUNNING them, so the flip waits for one live
-  ///  round in which MainThreadViolations stays 0. Reading the code is not
-  ///  the same evidence - this guard exists because reading it missed the
-  ///  violation twice.</summary>
-  StrictMainThread: Boolean = False;
+  ///  the pipe handler thread) were found by RUNNING them, never by
+  ///  reading the code, which had missed them twice; so the flip waited
+  ///  for one live round in which MainThreadViolations stays 0. That round
+  ///  ran on 2026-10-17 over the write paths through the bridge -
+  ///  ContentResult, LinesResult, the uses planner and extract method's
+  ///  four editor writes - and the row stayed "kept".
+  ///  WHAT IT COSTS if a path nobody exercised still breaks the rule: an
+  ///  EOffMainThread that NAMES the method, instead of a buffer corrupted
+  ///  now and then. It can only fire OFF the main thread, so no dialog
+  ///  reaches it - in practice an MCP tool, where it becomes an error
+  ///  answer. And it is one variable, so a report puts it back in one
+  ///  line.</summary>
+  StrictMainThread: Boolean = True;
 
 /// <summary>True iff the caller runs on the main thread.</summary>
 function OnMainThread: Boolean;

@@ -126,6 +126,13 @@ type
     ///  in exactly the case where the install had worked and only a new
     ///  session was missing; the user followed it twice.</summary>
     [Test] procedure AnAsideExeNamesTheInstallThatReplacedIt;
+    /// <summary>User, 2026-10-17: "Kannst du der MCP Bridge nicht eine
+    ///  Neustartfunktion verpassen, wenn die neue Exe da liegt, aber noch
+    ///  die alte umbenannte Version geladen ist? inklusive loeschen der
+    ///  alten Version." The decision and the cleanup rule; the hand-over
+    ///  itself needs two processes and real pipes and is measured by
+    ///  scratchpad relaunch\probe.ps1.</summary>
+    [Test] procedure AReplacedBridgeHandsOverAndTidiesUp;
     [Test] procedure BridgeVersion_ReachesTheServerOverARealPipe;
     /// <summary>Audit #22, H4: Stop waited 5 s for the handlers and then
     ///  returned as if all was well, so the owner freed the server (and the
@@ -151,6 +158,58 @@ type
     ///  tools and five got an entry), so the classification is TOTAL now
     ///  and this test is what refuses an unclassified one.</summary>
     [Test] procedure EveryToolGetsADeliberateWait;
+    /// <summary>A reviewing model with nothing but the tool list said it
+    ///  could use almost everything - and then: the shared apply text
+    ///  promises "plus a token" while only half the writing tools hand one
+    ///  out, so for the other half it could not tell whether an apply is
+    ///  protected against changes at all. It cannot be told from the
+    ///  outside, so each tool has to say it.</summary>
+    [Test] procedure EveryWritingToolSaysWhatProtectsItsApply;
+    /// <summary>Same review: six parameters had no description at all, so
+    ///  their meaning and their default could only be found by trying. The
+    ///  sweep found 46 of them - including the apply of convert_properties,
+    ///  which is why this rule is a test and not a round of fixes.</summary>
+    [Test] procedure EveryToolParameterIsDescribed;
+    /// <summary>The "guide" tool answers what this server can do - the one
+    ///  text a fresh session can read before it knows the toolbox, and the
+    ///  only one that costs nothing until it is asked for. A guide that
+    ///  misses a tool, or names one that is gone, is worse than none, so
+    ///  the two lists are held against each other in all three directions:
+    ///  every tool in exactly one section, every section name a real tool,
+    ///  and every name present in the prose that section shows.</summary>
+    [Test] procedure TheGuideAndTheToolListAgree;
+    /// <summary>The initialize instructions are the ONLY text every
+    ///  session with this server registered pays for, whether it calls a
+    ///  tool or not (measured 2026-10-19: 946 characters, ~235 tokens,
+    ///  against ~680 for the 61 names and ~13 800 for all schemas). They
+    ///  were cut to that size in 1.11.1 and must not grow back into a
+    ///  catalogue - that is what the guide tool is for, which costs
+    ///  nothing until it is called.</summary>
+    [Test] procedure TheAlwaysLoadedInstructionsStayShort;
+    /// <summary>Reported by a reviewing session on 2.0.6: an empty lsp_*
+    ///  answer always blamed a precompiled .dcu as the "usual cause" - and
+    ///  in the case it had, hover ANSWERED and only the definition was
+    ///  unresolved, so the hint sent it looking in the wrong place and
+    ///  never named find_original_symbol, which does answer there. Plus
+    ///  2.0.6's own regression: the tool's sentence and the generic text
+    ///  both opened with "DelphiLSP returned nothing".</summary>
+    [Test] procedure AnEmptyAnswerNamesTheRightCause;
+    /// <summary>Opening or closing a project throws away unsaved work when
+    ///  nobody is asked - and the IDE's own question cannot be answered
+    ///  through a pipe, it only blocks the call. Both tools therefore have
+    ///  to OFFER the decision and say that they refuse without it, and the
+    ///  file list has to be a reviewable change like every other write.
+    ///  </summary>
+    [Test] procedure AProjectActionSaysWhatHappensToUnsavedWork;
+    /// <summary>Measured 2026-10-20 through the session log: 103 .dcu in
+    ///  the directory the .delphilsp.json names made DelphiLSP load 60
+    ///  project units FROM those, and for their symbols it answers a
+    ///  definition without a file - so go to definition, find references
+    ///  and rename come back empty with nothing saying why. They were
+    ///  OLDER than the sources and were used anyway, so only an empty
+    ///  directory helps. This pins the three pure steps: find the
+    ///  directory, find what shadows a source, move it aside.</summary>
+    [Test] procedure TheLspDcuShadowIsFoundAndMovable;
   end;
 
   /// <summary>Issue #13: while DelphiLSP loads a big project (12-30 s) its
@@ -174,6 +233,18 @@ type
   public
     [Test] procedure WrongValueType_FallsBackToTheDefault;
     [Test] procedure RenameChoices_AreRememberedAndOutOfRangeIsRefused;
+    /// <summary>User request 2026-10-20: a session cannot click the
+    ///  options page, so the settings are readable and writable by NAME -
+    ///  which only works while the descriptor, the getters, the setters
+    ///  and Save agree about every one of them. Two hand-kept lists are
+    ///  what made the legacy migration drop five values (audit #37,
+    ///  L4e).</summary>
+    [Test] procedure EverySettingIsDescribedAndWiredUp;
+    /// <summary>...and "for this IDE instance only" has to mean it: a
+    ///  Save triggered elsewhere (the rename dialog stores its scope, the
+    ///  uses cleanup its keep list) must not make a temporary change
+    ///  permanent behind the user's back.</summary>
+    [Test] procedure ASessionOnlyValueIsNeverPersisted;
   end;
 
   /// <summary>DelphiLSP answers a "go to definition" for a static class
@@ -275,6 +346,12 @@ type
   public
     [Test] procedure EditGuard_MatchesWholeWordsOnly;
     [Test] procedure ForeignAnswerAtADeclaration_IsRecognised;
+    /// <summary>Issue #49: renaming a parameter from inside the body
+    ///  changed the implementation header and left the declaration in the
+    ///  class alone - and Delphi requires the two names to be identical
+    ///  (measured with dcc32 37.0: E2037 plus an undeclared identifier for
+    ///  every use in the body), so the result did not compile.</summary>
+    [Test] procedure AParameterIsDeclaredTwiceAndBothMustFollow;
   end;
 
   /// <summary>Found by running the check on the user's real project
@@ -466,6 +543,17 @@ type
     ///  nobody can see and Ctrl+Z cannot reach. Only the quick-fix tools
     ///  cleaned up after themselves; the rule is shared now.</summary>
     [Test] procedure AModuleTheCallOpenedIsNotLeftBehind;
+    /// <summary>Measured live (2.0.4): interface_guids answered "The
+    ///  declarations you named carry a fresh GUID now" after an apply whose
+    ///  only id matched nothing at all - a static note asserting success,
+    ///  which is the lie 1.25.1 found in the line-ending tool. The sentence
+    ///  is DERIVED from the outcomes now, in one shared place.</summary>
+    [Test] procedure AnApplyNoteSaysWhatReallyHappened;
+    /// <summary>Reported by a reviewing model (2026-10-19): an empty
+    ///  lsp_hover answer carried "note" twice, because AddPair APPENDS.
+    ///  A duplicate key is valid JSON of which a parser keeps one pair -
+    ///  its choice - so one of the two sentences was lost at random.</summary>
+    [Test] procedure AnAnswerCarriesNoKeyTwice;
   end;
 
   /// <summary>A forum screenshot (2026-10-02) showed the Extract Method
@@ -726,6 +814,12 @@ type
     [Test] procedure OnlyWhatWasAskedForAndMayBeRewritten;
     [Test] procedure BothChecksShareOneRowRule;
     [Test] procedure TheEncodingToolDeclaresWhatItTakes;
+    /// <summary>Found by running the check against a real project
+    ///  (1.31.3): it offered to convert the shipped Indy IdHTTP.pas,
+    ///  because the scope takes every unit OPEN in the editor and the
+    ///  BDS-root guard only ever covered the uses closure. A check that
+    ///  rewrites BYTES must never reach into the installation.</summary>
+    [Test] procedure NoCheckRewritesTheInstallation;
   end;
 
   /// <summary>Forum report 2026-10-15: Delphi had been installed by an admin
@@ -736,6 +830,12 @@ type
   TInstallOutputRootTests = class
   public
     [Test] procedure ABuildNeverWritesWhereItMayNot;
+    /// <summary>Installing over a file somebody is RUNNING. Windows
+    ///  refuses to overwrite such a file but allows renaming it, and an
+    ///  installer that does not know this reports success without
+    ///  replacing anything - which is how a stale MCP bridge survived four
+    ///  versions (1.22.1).</summary>
+    [Test] procedure AFileInUseIsMovedAsideAndReplaced;
   end;
 
   [TestFixture]
@@ -793,7 +893,10 @@ uses
   Expert.MoveToUnit, Expert.SafeDeletePlan, Expert.McpTools, Expert.WithRewriter,
   Expert.SemanticReplace, Expert.SelectionValidator, Expert.ExtractMethod,
   Expert.SignatureEdit, Expert.MethodEdit, System.StrUtils,
-  Expert.DebugConsistency, DIH.Placeholders;
+  Expert.DebugConsistency, DIH.Placeholders, DIH.FileOps,
+  // Generics.Collections: TJSONObject.GetPair is inline and the
+  // doubled-note test calls it (H2443 without this entry).
+  System.DateUtils, System.Generics.Collections;
 
 const
   NL = sLineBreak;
@@ -1313,6 +1416,51 @@ begin
     StampBridgeVersion('{"method":"context"}', ''), 'no version, no stamp');
 end;
 
+procedure TMcpPipeRegressionTests.AReplacedBridgeHandsOverAndTidiesUp;
+const
+  Aside = 'C:\x\mcp\RefactoringLightMcp.exe.208982825.old';
+  Canon = 'C:\x\mcp\RefactoringLightMcp.exe';
+var
+  Plan: TBridgeRelaunch;
+  Everything, Nothing: TFunc<string, Boolean>;
+begin
+  Everything := function(APath: string): Boolean begin Result := True; end;
+  Nothing := function(APath: string): Boolean begin Result := False; end;
+
+  // The normal case - this IS the installed exe, nothing to do.
+  Plan := PlanBridgeRelaunch(Canon, Everything, False);
+  Assert.IsFalse(Plan.Wanted, 'the installed exe never hands over');
+  Assert.AreEqual('', Plan.NewExe, False);
+  Assert.IsTrue(Plan.Reason.Contains('installed exe'), Plan.Reason);
+
+  // An install moved us aside and wrote the new one: hand over.
+  Plan := PlanBridgeRelaunch(Aside, Everything, False);
+  Assert.IsTrue(Plan.Wanted, 'an aside image hands over: ' + Plan.Reason);
+  Assert.AreEqual(Canon, Plan.NewExe, False);
+
+  // ...but only when the successor is really there. A packaged host
+  // redirects %LOCALAPPDATA%, so the aside copy can sit in a view the
+  // install never wrote to (1.22.3) - then there is nothing to hand to.
+  Plan := PlanBridgeRelaunch(Aside, Nothing, False);
+  Assert.IsFalse(Plan.Wanted, 'no successor, no hand-over');
+  Assert.AreEqual('', Plan.NewExe, False, 'and no path is invented');
+  Assert.IsTrue(Plan.Reason.Contains('not there'), Plan.Reason);
+
+  // The successor ALWAYS gets --no-relaunch, so a loop is impossible even
+  // if an install ever produced an aside name twice.
+  Plan := PlanBridgeRelaunch(Aside, Everything, True);
+  Assert.IsFalse(Plan.Wanted, 'suppressed: serve from here');
+  Assert.IsTrue(Plan.Reason.Contains('no-relaunch'), Plan.Reason);
+
+  // The cleanup: every aside copy but the one we run from. That one is
+  // in use - Windows refuses it, and the NEXT bridge removes it.
+  var Gone := AsideBridgeExesToDelete(
+    [Canon, Aside, 'C:\x\mcp\RefactoringLightMcp.exe.7.old',
+     'C:\x\mcp\notes.txt', 'C:\x\mcp\RefactoringLightMcp.exe.old'], Aside);
+  Assert.AreEqual(1, Integer(Length(Gone)), 'one deletable copy');
+  Assert.AreEqual('C:\x\mcp\RefactoringLightMcp.exe.7.old', Gone[0], False);
+end;
+
 procedure TMcpPipeRegressionTests.AnAsideExeNamesTheInstallThatReplacedIt;
 var
   Dir, Exe, Aside: string;
@@ -1602,6 +1750,504 @@ begin
     [Before, During]));
 end;
 
+procedure TMcpPipeRegressionTests.EveryToolParameterIsDescribed;
+var
+  Props: Integer;
+  Bad: string;
+
+  procedure Note(const AWhat: string);
+  begin
+    if Bad <> '' then Bad := Bad + '; ';
+    Bad := Bad + AWhat;
+  end;
+
+begin
+  Props := 0;
+  Bad := '';
+  var Arr := McpToolDefinitions;
+  try
+    Assert.IsTrue((Arr <> nil) and (Arr.Count > 40), 'the shipped list');
+    for var V in Arr do
+    begin
+      var Tool := V as TJSONObject;
+      var Name := Tool.GetValue<string>('name', '');
+      var Schema := Tool.GetValue<TJSONObject>('inputSchema', nil);
+      if Schema = nil then Continue;
+      var PropsObj := Schema.GetValue<TJSONObject>('properties', nil);
+      if PropsObj = nil then Continue;
+      for var Pair in PropsObj do
+      begin
+        Inc(Props);
+        var Body := Pair.JsonValue as TJSONObject;
+        var Desc := Body.GetValue<string>('description', '');
+        if Trim(Desc) = '' then
+        begin
+          Note(Name + '.' + Pair.JsonString.Value + ' has no description');
+          Continue;
+        end;
+        // "1-based column" does not say HOW it counts - the question a
+        // reviewer asked, and the answer belongs where it is asked.
+        if SameText(Pair.JsonString.Value, 'column') or
+           SameText(Pair.JsonString.Value, 'end_column') then
+          if not Desc.ToLower.Contains('tab') then
+            Note(Name + '.' + Pair.JsonString.Value +
+              ' does not say how it counts a tab');
+      end;
+    end;
+  finally
+    Arr.Free;
+  end;
+
+  Assert.AreEqual('', Bad, Bad);
+  Assert.IsTrue(Props > 200, 'every parameter of every tool was looked at');
+end;
+
+procedure TMcpPipeRegressionTests.TheLspDcuShadowIsFoundAndMovable;
+var
+  Dir, Cfg, Err, Target: string;
+begin
+  // 1. the option, in the shapes a real dccOptions line has.
+  Assert.AreEqual('.\DCU\Win64\Debug',
+    DcuOutputFromDccOptions('-$O- --no-config -NU.\DCU\Win64\Debug -NSSystem'),
+    'the -NU of our own configuration, verbatim');
+  Assert.AreEqual('C:\out dir\dcu',
+    DcuOutputFromDccOptions('-I"c:\x" -NU"C:\out dir\dcu" -R"c:\y"'),
+    'a quoted path with a space');
+  Assert.AreEqual('', DcuOutputFromDccOptions('-$O- -NSSystem -NB"c:\dcp"'),
+    'no -NU at all');
+  Assert.AreEqual('', DcuOutputFromDccOptions(''), 'nothing');
+
+  Dir := TPath.Combine(TPath.GetTempPath, 'rl-dcu-' + IntToStr(GetCurrentThreadId));
+  try
+    TDirectory.CreateDirectory(Dir);
+    // 2. a config file as the IDE writes it: the options are ONE JSON
+    //    string, so the backslashes are escaped in it.
+    Cfg := TPath.Combine(Dir, 'Demo.delphilsp.json');
+    TFile.WriteAllText(Cfg,
+      '{"settings":{"project":"file:///x","dccOptions":"-$O- ' +
+      '-NU.\\\\DCU\\\\Win64\\\\Debug -NSSystem","projectFiles":[]}}');
+    Assert.AreEqual(TPath.Combine(Dir, 'DCU\Win64\Debug'),
+      LspDcuDirOfConfig(Cfg, Dir),
+      'the directory, resolved against the project like the compiler does');
+
+    // 3. WHAT THE DIRECTORY SAYS ABOUT ITSELF. MEASURED on a live session
+    //    (2026-10-20, eight states, one variable each): a unit the LSP
+    //    loads from a .dcu DOES answer with its source position, so the
+    //    finding is not "there are .dcu files here". What broke go to
+    //    definition was a directory that does not MATCH the sources: a
+    //    unit missing from it, or a .dcu older than its own source.
+    var DcuDir := TPath.Combine(Dir, 'DCU\Win64\Debug');
+    TDirectory.CreateDirectory(DcuDir);
+    var Far := TPath.Combine(Dir, 'Elsewhere');
+    TDirectory.CreateDirectory(Far);
+    for var N in ['Unit1.pas', 'Unit2.pas', 'Demo.dpr', 'Main.dfm'] do
+      TFile.WriteAllText(TPath.Combine(Dir, N), 'unit ' + N + ';');
+    TFile.WriteAllText(TPath.Combine(Far, 'Hidden.pas'), 'unit Hidden;');
+    var Sources: TArray<string> := [TPath.Combine(Dir, 'Unit1.pas'), TPath.Combine(Dir, 'Unit2.pas'),
+                    TPath.Combine(Dir, 'Demo.dpr'), TPath.Combine(Dir, 'Main.dfm'),
+                    TPath.Combine(Far, 'Hidden.pas')];
+    // Unit1 + Hidden built, Unit2 not - and a .dcu of a unit the project
+    // does not have must not count at all.
+    for var N in ['Unit1.dcu', 'Hidden.dcu', 'Vcl.Forms.dcu'] do
+      TFile.WriteAllText(TPath.Combine(DcuDir, N), 'x');
+    var St := InspectLspDcuDir(DcuDir, Sources, [Dir]);
+    // The .dfm is no unit - and neither is the project FILE: measured over
+    // three projects of this repository, no .dcu is ever named after the
+    // .dpk or the .dpr (that file produces the .bpl or the .exe). Counting
+    // it reported the directory as incomplete by one, for a file that can
+    // never satisfy it, while the status row said it matches (live, 2.5.0).
+    Assert.AreEqual(3, St.UnitCount,
+      'three units: Unit1, Unit2, Hidden - not Main.dfm and not Demo.dpr');
+    Assert.AreEqual(2, St.Present, 'Unit1.dcu and Hidden.dcu');
+    Assert.AreEqual(1, Integer(Length(St.Missing)),
+      'only Unit2 has none: ' + string.Join(', ', St.Missing));
+    // Its OWN spelling, not the lower-cased lookup key: the live 2.5.0
+    // answer read "First missing: delphirefactoringlight".
+    Assert.IsTrue(St.Missing[0] = 'Unit2',
+      'and it is Unit2, never the project file, spelled as the source ' +
+      'is: ' + St.Missing[0]);
+    Assert.AreEqual(0, Integer(Length(St.Stale)),
+      'and none of them is older than its source');
+
+    // The same for a PACKAGE, which is what the live finding was about.
+    TFile.WriteAllText(TPath.Combine(Dir, 'Pack.dpk'), 'package Pack;');
+    var StP := InspectLspDcuDir(DcuDir,
+      [TPath.Combine(Dir, 'Unit1.pas'), TPath.Combine(Dir, 'Pack.dpk')], [Dir]);
+    Assert.AreEqual(1, StP.UnitCount, 'the .dpk is no unit either');
+    Assert.AreEqual(0, Integer(Length(StP.Missing)),
+      'so a fully built package reports nothing missing: ' +
+      string.Join(', ', StP.Missing));
+
+    // A .dcu older than its source is the one per-file finding left - and
+    // whether moving it aside HELPS depends on the compiler being able to
+    // reach the source instead.
+    TFile.SetLastWriteTime(TPath.Combine(DcuDir, 'Unit1.dcu'),
+      IncHour(Now, -5));
+    TFile.SetLastWriteTime(TPath.Combine(DcuDir, 'Hidden.dcu'),
+      IncHour(Now, -5));
+    St := InspectLspDcuDir(DcuDir, Sources, [Dir]);
+    Assert.AreEqual(2, Integer(Length(St.Stale)),
+      'both are older than their source now');
+    var Repl := '';
+    for var I := 0 to High(St.Stale) do
+      if St.StaleReplaceable[I] then
+        Repl := Repl + ExtractFileName(St.Stale[I]) + ' ';
+    Assert.IsTrue(Repl = 'Unit1.dcu ',
+      'only Unit1''s source lies in a directory the LSP searches, so only ' +
+      'there is removing the .dcu a cure; Hidden.dcu is the ONLY way to ' +
+      'that unit and removing it would cost the answer (measured)');
+
+    // And the count a complete directory is compared against comes from
+    // the configuration itself.
+    var Cfg3 := TPath.Combine(Dir, 'Count.delphilsp.json');
+    TFile.WriteAllText(Cfg3,
+      '{"settings":{"dccOptions":"-$O-","projectFiles":[' +
+      '{"name":"A","file":"file:///a"},{"name":"B","file":"file:///b"}]}}');
+    Assert.AreEqual(2, LspProjectUnitCount(Cfg3), 'two units listed');
+    Assert.AreEqual(0, LspProjectUnitCount(TPath.Combine(Dir, 'none.json')),
+      'and no file is no claim');
+
+    // ...and the search path is read as ONE option whose value continues
+    // past a closing quote - reading only to that quote is the mistake
+    // that said "the source directory is on no search path" when it was.
+    var Cfg2 := TPath.Combine(Dir, 'Paths.delphilsp.json');
+    TFile.WriteAllText(Cfg2,
+      '{"settings":{"dccOptions":"-$O- -U\"c:\\\\rtl\";..\\\\Source;\"c:\\\\more\" ' +
+      '-NSSystem"}}');
+    var Dirs := LspUnitSearchDirs(Cfg2, Dir);
+    Assert.IsTrue(Length(Dirs) >= 4,
+      'project dir + three -U entries: ' + string.Join(' | ', Dirs));
+    var HasSource := False;
+    // '..\Source' is resolved against the project directory, so it is
+    // the PARENT's Source - that is what the compiler does with it.
+    var Want := ExcludeTrailingPathDelimiter(ExpandFileName(
+      TPath.Combine(Dir, '..\Source')));
+    for var D in Dirs do
+      if SameText(D, Want) then HasSource := True;
+    Assert.IsTrue(HasSource,
+      'the relative entry BETWEEN two quoted ones is found as ' + Want +
+      ': ' + string.Join(' | ', Dirs));
+
+    // 4. moved aside, not deleted - and the finding is gone afterwards.
+    var Stale1 := TPath.Combine(DcuDir, 'Unit1.dcu');
+    var Aside := DcuAsideFolder(DcuDir);
+    Assert.IsTrue(MoveDcuAside(Stale1, Aside, Target, Err), Err);
+    Assert.IsFalse(TFile.Exists(Stale1),
+      'the compiler no longer finds it there');
+    Assert.IsTrue(TFile.Exists(Target), 'but it still exists: ' + Target);
+    St := InspectLspDcuDir(DcuDir, [TPath.Combine(Dir, 'Unit1.pas')], [Dir]);
+    Assert.AreEqual(0, Integer(Length(St.Stale)),
+      'and no stale .dcu is reported any more');
+    Assert.IsFalse(MoveDcuAside(Stale1, Aside, Target, Err),
+      'moving it twice is refused');
+    Assert.IsTrue(Err <> '', 'with a reason');
+  finally
+    try
+      if TDirectory.Exists(Dir) then TDirectory.Delete(Dir, True);
+    except
+    end;
+  end;
+end;
+
+procedure TMcpPipeRegressionTests.AProjectActionSaysWhatHappensToUnsavedWork;
+
+  function Tool(AArr: TJSONArray; const AName: string): TJSONObject;
+  begin
+    Result := nil;
+    for var V in AArr do
+      if SameText((V as TJSONObject).GetValue<string>('name', ''), AName) then
+        Exit(V as TJSONObject);
+  end;
+
+  function Props(AArr: TJSONArray; const AName: string): TJSONObject;
+  begin
+    Result := nil;
+    var T := Tool(AArr, AName);
+    if T = nil then Exit;
+    var S := T.GetValue<TJSONObject>('inputSchema', nil);
+    if S <> nil then Result := S.GetValue<TJSONObject>('properties', nil);
+  end;
+
+begin
+  var Arr := McpToolDefinitions;
+  try
+    for var N in ['project_open', 'project_close'] do
+    begin
+      var T := Tool(Arr, N);
+      Assert.IsNotNull(T, N + ' is a tool of this server');
+      var P := Props(Arr, N);
+      Assert.IsNotNull(P, N + ' has a schema');
+      Assert.IsNotNull(P.GetValue<TJSONObject>('save_modified', nil),
+        N + ' must OFFER what happens to unsaved work');
+      var D := T.GetValue<string>('description', '');
+      Assert.IsTrue(D.ToLower.Contains('refuse'),
+        N + ' must say that it refuses while something is unsaved: ' + D);
+      Assert.IsTrue(D.ToLower.Contains('unsaved'),
+        N + ' must name unsaved work: ' + D);
+    end;
+
+    // The project file is not a buffer: no Ctrl+Z, so it is a reviewable
+    // change like every other write - and saving it is a choice.
+    var PF := Props(Arr, 'project_files');
+    Assert.IsNotNull(PF, 'project_files has a schema');
+    for var A in ['add', 'remove', 'apply', 'save'] do
+      Assert.IsNotNull(PF.GetValue<TJSONObject>(A, nil),
+        'project_files declares "' + A + '"');
+    var FD := Tool(Arr, 'project_files').GetValue<string>('description', '');
+    Assert.IsTrue(FD.Contains('Ctrl+Z'),
+      'and says why it needs apply at all: ' + FD);
+  finally
+    Arr.Free;
+  end;
+end;
+
+procedure TMcpPipeRegressionTests.AnEmptyAnswerNamesTheRightCause;
+const
+  Mine = 'DelphiLSP returned nothing for this position.';
+  F = 'C:\p\Expert.LspManager.pas';
+
+  function Occurrences(const AText, AWhat: string): Integer;
+  begin
+    Result := 0;
+    var P := Pos(AWhat, AText);
+    while P > 0 do
+    begin
+      Inc(Result);
+      P := Pos(AWhat, AText, P + 1);
+    end;
+  end;
+
+begin
+  // The reported case: the unit IS analysed (hover answers), only this
+  // position is unresolved.
+  var Pos_ := LspEmptyAnswerNote(Mine, F, -1, True, True);
+  Assert.AreEqual(1, Occurrences(Pos_, 'DelphiLSP returned nothing'),
+    'the sentence is said ONCE, not by the prefix AND the generic text: ' +
+    Pos_);
+  Assert.IsTrue(Pos_.StartsWith(Mine), 'the tool speaks first: ' + Pos_);
+  // MEASURED 2026-10-20 (session log): with hover answering all along, the
+  // cause was the DECLARING unit coming from a stale .dcu. So an analysed
+  // unit must name BOTH causes and what tells them apart - the earlier
+  // version of this test demanded the opposite and was wrong.
+  Assert.IsTrue(Pos_.Contains('DECLARING unit'),
+    'the other cause is named: ' + Pos_);
+  Assert.IsTrue(Pos_.Contains('file:///(-1:0)'),
+    'with the log line that tells the two apart: ' + Pos_);
+  Assert.IsTrue(Pos_.Contains('find_original_symbol'),
+    'and the way out is named: ' + Pos_);
+  Assert.IsTrue(Pos_.Contains('RSS-5463'),
+    'with the known case of it: ' + Pos_);
+
+  // The other half: nothing of the unit was ever analysed. THERE the .dcu
+  // is the usual cause, and that is where the recipe belongs.
+  var Silent := LspEmptyAnswerNote('', F, -1, False, True);
+  Assert.IsTrue(Silent.StartsWith('DelphiLSP returned nothing'),
+    'without a prefix the note says it itself: ' + Silent);
+  Assert.IsTrue(Silent.Contains('.dcu'), 'the usual cause: ' + Silent);
+  // How to see it: the SETTING (which the settings tool can now flip) and
+  // the log file it writes - not the environment variable, which needs the
+  // IDE to be restarted with it.
+  Assert.IsTrue(Silent.Contains('LspLogging') and
+    Silent.Contains('RefactoringLight*.log'),
+    'and how to see it: ' + Silent);
+  Assert.IsFalse(Silent.Contains('RSS-5463'),
+    'but not the overload story, which is about a unit that IS analysed: ' +
+    Silent);
+
+  // A file we have just sent is simply not ready yet - that comes first,
+  // before any cause at all.
+  var Fresh := LspEmptyAnswerNote(Mine, F, 2500, False, False);
+  Assert.IsTrue(Fresh.Contains('2 s ago'), 'how long ago, in seconds: ' + Fresh);
+  Assert.IsTrue(Fresh.Contains('Expert.LspManager.pas'),
+    'and which file: ' + Fresh);
+  Assert.IsFalse(Fresh.Contains('find_original_symbol'),
+    'a tool that is not about declarations does not point there: ' + Fresh);
+  Assert.AreEqual(1, Occurrences(Fresh, 'DelphiLSP returned nothing'),
+    'still once: ' + Fresh);
+end;
+
+procedure TMcpPipeRegressionTests.TheAlwaysLoadedInstructionsStayShort;
+var
+  Named: Integer;
+  Names: string;
+begin
+  var Instr := McpServerInstructions;
+  Assert.IsTrue(Length(Instr) > 400,
+    'the instructions must still say something: ' + IntToStr(Length(Instr)));
+  Assert.IsTrue(Length(Instr) <= 1100,
+    Format('every session pays for this text - %d characters is too much, ' +
+      'put it in the guide instead', [Length(Instr)]));
+
+  // It may name the few tools a session cannot do without (the three that
+  // exist with no IDE, and the buffer rule it states), but it is NOT the
+  // catalogue: a session gets the names anyway, and the guide has room.
+  Named := 0;
+  Names := '';
+  var Arr := McpToolDefinitions;
+  try
+    for var V in Arr do
+    begin
+      var N := (V as TJSONObject).GetValue<string>('name', '');
+      if (N <> '') and Instr.Contains(N) then
+      begin
+        Inc(Named);
+        Names := Names + ' ' + N;
+      end;
+    end;
+  finally
+    Arr.Free;
+  end;
+  Assert.IsTrue(Named <= 12,
+    Format('the instructions name %d tools (%s) - that is a list, and a ' +
+      'list belongs in the guide', [Named, Names.Trim]));
+  Assert.IsTrue(Instr.Contains('guide'),
+    'but the tool that explains the rest has to be findable: ' + Instr);
+end;
+
+procedure TMcpPipeRegressionTests.TheGuideAndTheToolListAgree;
+var
+  Bad: string;
+  Counted: Integer;
+
+  procedure Note(const AWhat: string);
+  begin
+    // ALL of them at once: one name at a time hides how stale it is.
+    if Bad <> '' then Bad := Bad + '; ';
+    Bad := Bad + AWhat;
+  end;
+
+begin
+  Bad := '';
+  Counted := 0;
+  var Secs := McpGuideSections;
+  Assert.IsTrue(Length(Secs) > 5,
+    'the guide must have its sections: ' + IntToStr(Length(Secs)));
+
+  var Text := McpGuideText;
+  Assert.IsTrue(Text.Contains('guide is this text'),
+    'the rendered guide is what the tool answers');
+
+  var Arr := McpToolDefinitions;
+  try
+    Assert.IsTrue((Arr <> nil) and (Arr.Count > 40),
+      'the shipped tool list is what this test walks');
+
+    // 1. every tool is in EXACTLY one section, and 3. the prose that
+    //    section shows really names it.
+    for var V in Arr do
+    begin
+      var Name := (V as TJSONObject).GetValue<string>('name', '');
+      if Name = '' then Continue;
+      Inc(Counted);
+      var Where := 0;
+      for var S in Secs do
+        for var T in S.Tools do
+          if SameText(T, Name) then
+          begin
+            Inc(Where);
+            if not S.Text.Contains(Name) then
+              Note(Format('%s is listed under "%s" but that text does not ' +
+                'name it', [Name, S.Title]));
+          end;
+      if Where = 0 then
+        Note(Name + ' is in no section of the guide')
+      else if Where > 1 then
+        Note(Format('%s is in %d sections', [Name, Where]));
+    end;
+
+    // 2. and no section names a tool that does not exist any more.
+    for var S in Secs do
+      for var T in S.Tools do
+      begin
+        var Found := False;
+        for var V in Arr do
+          if SameText((V as TJSONObject).GetValue<string>('name', ''), T) then
+            Found := True;
+        if not Found then
+          Note(Format('"%s" names %s, which is not a tool of this server',
+            [S.Title, T]));
+      end;
+  finally
+    Arr.Free;
+  end;
+
+  Assert.IsTrue(Counted > 40,
+    Format('the sweep must see the tools, counted %d', [Counted]));
+  Assert.AreEqual('', Bad, Bad);
+end;
+
+procedure TMcpPipeRegressionTests.EveryWritingToolSaysWhatProtectsItsApply;
+var
+  Token, Fresh, Ids, Guard: Integer;
+  Bad: string;
+
+  procedure Note(const AWhat: string);
+  begin
+    // ALL of them: fixing one at a time hides how many there are.
+    if Bad <> '' then Bad := Bad + '; ';
+    Bad := Bad + AWhat;
+  end;
+
+begin
+  Token := 0;
+  Fresh := 0;
+  Ids := 0;
+  Guard := 0;
+  Bad := '';
+  var Arr := McpToolDefinitions;
+  try
+    Assert.IsTrue((Arr <> nil) and (Arr.Count > 40),
+      'the shipped tool list is what this test walks');
+    for var V in Arr do
+    begin
+      var Tool := V as TJSONObject;
+      var Name := Tool.GetValue<string>('name', '');
+      var Schema := Tool.GetValue<TJSONObject>('inputSchema', nil);
+      if Schema = nil then Continue;
+      var Props := Schema.GetValue<TJSONObject>('properties', nil);
+      if Props = nil then Continue;
+      var ApplyObj := Props.GetValue<TJSONObject>('apply', nil);
+      if ApplyObj = nil then Continue;          // a read-only tool
+
+      var Desc := ApplyObj.GetValue<string>('description', '');
+      var HasToken := Props.GetValue<TJSONObject>('token', nil) <> nil;
+      if HasToken then
+      begin
+        Inc(Token);
+        if not Desc.ToLower.Contains('token') then
+          Note(Name + ': it hands out a token and does not say so');
+      end
+      else
+      begin
+        // The promise must not be made where it cannot be kept, and the
+        // caller has to learn what DOES protect the apply instead.
+        if Desc.ToLower.Contains('plus a token') then
+          Note(Name + ': promises a token it has no parameter for');
+        if not Desc.ToLower.Contains('no token') then
+          Note(Name + ': has no token and never says what protects an apply');
+        // The three shapes an apply can be protected by, and a tool has
+        // to name the one it uses: it looks again (re-runs its analysis),
+        // it works from the ids of a scan, or it compares the file with
+        // what the analysis saw and refuses a file that moved on.
+        if Desc.ToLower.Contains('re-runs') then Inc(Fresh)
+        else if Desc.ToLower.Contains('re-scans') then Inc(Ids)
+        else if Desc.ToLower.Contains('compares') then Inc(Guard)
+        else
+          Note(Name + ': says "no token" without naming what it does instead');
+      end;
+    end;
+  finally
+    Arr.Free;
+  end;
+
+  Assert.AreEqual('', Bad, Bad);
+  // ...and the test must not pass because it found nothing to look at.
+  Assert.IsTrue(Token >= 9, 'the tools that pin a preview with a token');
+  Assert.IsTrue(Fresh >= 5, 'the tools that re-run their own analysis');
+  Assert.IsTrue(Ids >= 4, 'the tools that act on the ids of a scan');
+  Assert.IsTrue(Guard >= 1, 'and the one that compares before it writes');
+end;
+
 procedure TMcpPipeRegressionTests.EveryToolGetsADeliberateWait;
 var
   Missing: TArray<string>;
@@ -1738,6 +2384,134 @@ begin
         if Had then Reg.WriteInteger('VerifySession', Old);
         Reg.CloseKey;
       end;
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
+procedure TSettingsRobustnessTests.EverySettingIsDescribedAndWiredUp;
+var
+  Bad: string;
+  Err, Text, Back: string;
+begin
+  var Infos := TPluginSettings.SettingInfos;
+  Assert.IsTrue(Length(Infos) >= 15,
+    'the descriptor must hold the settings: ' + IntToStr(Length(Infos)));
+  TPluginSettings.Load;
+  Bad := '';
+  for var Info in Infos do
+  begin
+    // Readable by name...
+    if not TPluginSettings.GetValueText(Info.Name, Back) then
+    begin
+      Bad := Bad + Info.Name + ' cannot be READ by name; ';
+      Continue;
+    end;
+    // ...and writable, with its OWN value, which must round-trip. That is
+    // what catches a setting added to the descriptor and nowhere else.
+    if not TPluginSettings.SetValueText(Info.Name, Back, Err) then
+      Bad := Bad + Info.Name + ': ' + Err + '; '
+    else
+    begin
+      TPluginSettings.GetValueText(Info.Name, Text);
+      if Text <> Back then
+        Bad := Bad + Format('%s: wrote "%s", reads "%s"; ',
+          [Info.Name, Back, Text]);
+    end;
+    if Info.DefaultText = '' then
+      if Info.Kind <> pskString then
+        Bad := Bad + Info.Name + ' has no default; ';
+    if Info.Summary = '' then
+      Bad := Bad + Info.Name + ' has no summary; ';
+  end;
+  Assert.AreEqual('', Bad, Bad);
+
+  // The three refusals a caller can run into, each with its reason.
+  Assert.IsFalse(TPluginSettings.SetValueText('NoSuchThing', '1', Err),
+    'an unknown name is refused');
+  Assert.IsTrue(Err.Contains('NoSuchThing'), 'and named: ' + Err);
+  Assert.IsFalse(TPluginSettings.SetValueText('LiveBlame', 'maybe', Err),
+    'a switch takes true or false');
+  Assert.IsTrue(Err.Contains('switch'), 'and says so: ' + Err);
+  Assert.IsFalse(TPluginSettings.SetValueText('BlameInfo', '9', Err),
+    'a number outside its range is refused');
+  Assert.IsTrue(Err.Contains('between'), 'with the range: ' + Err);
+end;
+
+procedure TSettingsRobustnessTests.ASessionOnlyValueIsNeverPersisted;
+var
+  Reg: TRegistry;
+  Key, Err, Persisted: string;
+  Had: Boolean;
+  Old: Boolean;
+begin
+  Key := TPluginSettings.RegistryKey;
+  Reg := TRegistry.Create(KEY_READ or KEY_WRITE);
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    Assert.IsTrue(Reg.OpenKey(Key, True), 'settings key');
+    Had := Reg.ValueExists('BlameUseTortoise') and
+      (Reg.GetDataType('BlameUseTortoise') = rdInteger);
+    Old := True;
+    if Had then Old := Reg.ReadBool('BlameUseTortoise');
+    Reg.CloseKey;
+    try
+      // A known state in the registry, then the opposite for THIS session.
+      TPluginSettings.Load;
+      Assert.IsTrue(TPluginSettings.SetValueText('BlameUseTortoise', 'true',
+        Err), Err);
+      TPluginSettings.Save;
+
+      Assert.IsTrue(TPluginSettings.SetValueText('BlameUseTortoise', 'false',
+        Err), Err);
+      TPluginSettings.MarkSessionOnly('BlameUseTortoise', True);
+      Assert.IsFalse(TPluginSettings.BlameUseTortoise,
+        'the change takes effect in this session at once');
+      Assert.IsTrue(TPluginSettings.IsSessionOnly('BlameUseTortoise',
+        Persisted), 'and it is marked as session-only');
+      Assert.AreEqual('True', Persisted,
+        'with the value the registry still holds');
+
+      // THE POINT: a Save from anywhere else must not persist it.
+      TPluginSettings.Save;
+      // NOT OpenKeyReadOnly: it sets TRegistry.FAccess to KEY_READ and
+      // never puts it back (read in System.Win.Registry), so every later
+      // OpenKey on this object is read-only and the restore below would
+      // raise "Fehler beim Setzen der Daten".
+      Assert.IsTrue(Reg.OpenKey(Key, False), 'read the key back');
+      try
+        Assert.IsTrue(Reg.ReadBool('BlameUseTortoise'),
+          'the registry keeps what it had - a session-only value is never ' +
+          'written, whoever saves');
+      finally
+        Reg.CloseKey;
+      end;
+
+      // Clearing the mark makes the current value ordinary again.
+      TPluginSettings.MarkSessionOnly('BlameUseTortoise', False);
+      Assert.IsFalse(TPluginSettings.IsSessionOnly('BlameUseTortoise',
+        Persisted), 'the mark is gone');
+      TPluginSettings.Save;
+      Assert.IsTrue(Reg.OpenKey(Key, False));
+      try
+        Assert.IsFalse(Reg.ReadBool('BlameUseTortoise'),
+          'and now the value is stored');
+      finally
+        Reg.CloseKey;
+      end;
+    finally
+      // the user's own value, whatever this test did
+      TPluginSettings.MarkSessionOnly('BlameUseTortoise', False);
+      if Reg.OpenKey(Key, True) then
+      try
+        if Had then Reg.WriteBool('BlameUseTortoise', Old)
+        else if Reg.ValueExists('BlameUseTortoise') then
+          Reg.DeleteValue('BlameUseTortoise');
+      finally
+        Reg.CloseKey;
+      end;
+      TPluginSettings.Load;
     end;
   finally
     Reg.Free;
@@ -2697,6 +3471,109 @@ end;
 
 { TRenameGuardTests }
 
+procedure TRenameGuardTests.AParameterIsDeclaredTwiceAndBothMustFollow;
+const
+  // the reporter's shape, plus a wrapped list and a free routine
+  Src =
+    'unit U;'#10 +                                          // 0
+    'interface'#10 +                                        // 1
+    'type'#10 +                                             // 2
+    '  TForm1 = class(TObject)'#10 +                        // 3
+    '  public'#10 +                                         // 4
+    '    procedure SetTitle(const Title: string);'#10 +     // 5
+    '    function Wrapped(const A: Integer;'#10 +           // 6
+    '      const Title: string): Boolean;'#10 +             // 7
+    '  end;'#10 +                                           // 8
+    'procedure Free1(const Title: string);'#10 +            // 9
+    'implementation'#10 +                                   // 10
+    'procedure TForm1.SetTitle(const Title: string);'#10 +  // 11
+    'begin'#10 +                                            // 12
+    'end;'#10 +                                             // 13
+    'function TForm1.Wrapped(const A: Integer;'#10 +        // 14
+    '  const Title: string): Boolean;'#10 +                 // 15
+    'begin'#10 +                                            // 16
+    'end;'#10 +                                             // 17
+    'procedure Free1(const Title: string);'#10 +            // 18
+    'begin'#10 +                                            // 19
+    'end;'#10 +                                             // 20
+    'end.';                                                 // 21
+  // Overloads: the partner is the declaration that carries that parameter
+  // AT THAT PLACE. Both of these declare A and B - at swapped places - so
+  // "the other declaration mentions the name somewhere" is not enough.
+  Ovl =
+    'unit V;'#10 +                                                     // 0
+    'interface'#10 +                                                   // 1
+    'type'#10 +                                                        // 2
+    '  TC = class'#10 +                                                // 3
+    '    procedure Init(const B: string; const A: Integer); overload;'#10 + // 4
+    '    procedure Init(const A: Integer; const B: string); overload;'#10 + // 5
+    '  end;'#10 +                                                      // 6
+    'implementation'#10 +                                              // 7
+    'procedure TC.Init(const B: string; const A: Integer);'#10 +       // 8
+    'begin'#10 +                                                       // 9
+    'end;'#10 +                                                        // 10
+    'procedure TC.Init(const A: Integer; const B: string);'#10 +       // 11
+    'begin'#10 +                                                       // 12
+    'end;'#10 +                                                        // 13
+    'end.';                                                            // 14
+var
+  P: Integer;
+begin
+  var Lines := string(Src).Split([#10]);
+
+  // THE REPORTED CASE: from the implementation header to the declaration
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 11, 'Title', P),
+    'the class declaration carries the same parameter');
+  Assert.AreEqual(5, P, 'and that is the line the rename also has to change');
+  // ...and the same rename started on the declaration
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 5, 'Title', P), 'the other way');
+  Assert.AreEqual(11, P);
+
+  // a WRAPPED list: the partner's name is not on its first line
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 14, 'Title', P), 'wrapped');
+  Assert.AreEqual(7, P, 'the continuation line, not the header line');
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 6, 'Title', P), 'and back');
+  Assert.AreEqual(15, P);
+  // ...and the anchor itself may BE a continuation line: that is what
+  // DelphiLSP answers for a wrapped header (1.15.4)
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 7, 'Title', P),
+    'a continuation line belongs to its header');
+  Assert.AreEqual(15, P);
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 15, 'Title', P), 'the same there');
+  Assert.AreEqual(7, P);
+
+  // a FREE routine declared in the interface section - same rule
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 18, 'Title', P), 'free routine');
+  Assert.AreEqual(9, P);
+  Assert.IsTrue(FindParameterPartnerLine(Lines, 9, 'Title', P), 'and back');
+  Assert.AreEqual(18, P);
+
+  // what is NOT a parameter of that header
+  Assert.IsFalse(FindParameterPartnerLine(Lines, 11, 'SetTitle', P),
+    'the routine''s own name is renamed through its own partner query');
+  Assert.IsFalse(FindParameterPartnerLine(Lines, 12, 'Title', P),
+    '"begin" is no header');
+  Assert.IsFalse(FindParameterPartnerLine(Lines, 11, 'Caption', P),
+    'a name the header does not declare');
+
+  // OVERLOADS: only the declaration that carries that parameter at that
+  // place - the other one is a different routine
+  var OL := string(Ovl).Split([#10]);
+  Assert.IsTrue(FindParameterPartnerLine(OL, 11, 'B', P), 'B of the second overload');
+  Assert.AreEqual(5, P,
+    'the declaration that has B SECOND - line 4 has a B too, at the front');
+  Assert.IsTrue(FindParameterPartnerLine(OL, 8, 'B', P), 'B of the first overload');
+  Assert.AreEqual(4, P, 'and that one pairs the other way round');
+  Assert.IsTrue(FindParameterPartnerLine(OL, 11, 'A', P), 'A of the second');
+  Assert.AreEqual(5, P);
+
+  // and the predicate the rename's anchor decision asks
+  Assert.IsTrue(HeaderDeclaresParameter(Lines, 5, 'Title'),
+    'a declaration declares its parameters - DelphiLSP answers nothing there');
+  Assert.IsFalse(HeaderDeclaresParameter(Lines, 5, 'SetTitle'), 'its own name');
+  Assert.IsFalse(HeaderDeclaresParameter(Lines, 4, 'Title'), '"public" is no header');
+end;
+
 procedure TRenameGuardTests.EditGuard_MatchesWholeWordsOnly;
 var
   B: TBytes;
@@ -3482,9 +4359,21 @@ end;
 procedure TSelfProtectionTests.AWriteFromAWorkerThreadIsRecordedAndCanBeRefused;
 var
   Before: Integer;
-  Raised, RanOffMain: Boolean;
+  Raised, RanOffMain, WasStrict: Boolean;
   T: TThread;
 begin
+  // 2.0 turned the counter into an exception, so the DEFAULT is part of
+  // the contract now - a revert has to be a deliberate edit, never a
+  // drift. The evidence for the flip is in the declaration's own doc.
+  WasStrict := StrictMainThread;
+  Assert.IsTrue(WasStrict, 'StrictMainThread is ON by default since 2.0');
+  try
+
+  // Both halves set the mode they are about; whatever the default is,
+  // this test puts it back (it used to end on a hard False, which from
+  // 2.0 on would have switched the guard off for the rest of the run).
+  StrictMainThread := False;
+
   // the test itself runs on the main thread, so nothing is recorded there
   Before := MainThreadViolations;
   Assert.IsTrue(OnMainThread, 'the suite runs on the main thread');
@@ -3509,13 +4398,12 @@ begin
   Assert.AreEqual('probe_from_worker', LastOffMainThreadCall,
     'and the call that did it is named');
 
-  // With the strict switch it is fatal instead of merely counted. It is OFF
-  // by default on purpose: the three known offenders would turn into hard
-  // errors before they are fixed.
+  // With the strict switch it is fatal instead of merely counted - which
+  // is what the plugin ships with since 2.0.
   Raised := False;
   RanOffMain := False;
   StrictMainThread := True;
-  try
+  begin
     T := TThread.CreateAnonymousThread(
       procedure
       begin
@@ -3533,11 +4421,13 @@ begin
     finally
       T.Free;
     end;
-  finally
-    StrictMainThread := False;
   end;
   Assert.IsTrue(Raised, 'strict mode raises EOffMainThread');
   Assert.IsFalse(RanOffMain, 'and the write never happens');
+
+  finally
+    StrictMainThread := WasStrict;
+  end;
 end;
 
 procedure TSelfProtectionTests.AnImpossibleUnitNameIsReportedAsADefect;
@@ -3712,6 +4602,93 @@ begin
   Assert.IsFalse(ParseFixId('nothex00-1-2', H, Gen, Idx), 'no hash');
   Assert.IsFalse(ParseFixId('0000002A-1-x', H, Gen, Idx), 'no index');
   Assert.IsFalse(ParseFixId('0000002A--1', H, Gen, Idx), 'a negative generation');
+end;
+
+procedure TSelfProtectionTests.AnApplyNoteSaysWhatReallyHappened;
+const
+  Thing = 'declaration(s)';
+  Done = 'carry a fresh GUID now';
+  Where = 'in the IDE buffer when the file was open (not saved)';
+begin
+  // The same rule for what an answer OFFERS. Measured live (2.5.1):
+  // with a complete DCU output the check found no such finding at all
+  // and still ended with "A "LSP reads a DCU" finding can be fixed
+  // from here" - and since 2.5.0 only a stale .dcu whose source the
+  // compiler can reach instead is movable, so the sentence was wrong
+  // in both directions.
+  Assert.AreEqual('', DebugFixOfferNote(0),
+    'nothing fixable means the answer offers nothing');
+  Assert.AreEqual('', DebugFixOfferNote(-1), 'and a bad count too');
+  var Offer := DebugFixOfferNote(3);
+  Assert.IsTrue(Offer.StartsWith('3 finding(s)'),
+    'and with three of them it says how many: ' + Offer);
+  Assert.IsTrue(Offer.Contains('older than its source'),
+    'naming WHICH finding has that cure: ' + Offer);
+  Assert.IsTrue(Offer.Contains('is a build'),
+    'and that the others have another one: ' + Offer);
+
+  // The measured case: apply=true with one id that matches no finding.
+  // Nothing happened, so the note may not say the opposite.
+  var Nothing := AppliedByIdsNote(0, 0, 1, Thing, Done, Where);
+  Assert.IsTrue(Nothing.StartsWith('NOTHING was changed'),
+    'an apply that matched nothing says so first: ' + Nothing);
+  Assert.IsFalse(Nothing.Contains(Done),
+    'and it does not claim the declarations were done: ' + Nothing);
+  Assert.IsTrue(Nothing.Contains('unknownIds'),
+    'while the id that matched nothing is pointed at: ' + Nothing);
+
+  // The ordinary case: two done, and the counts are the scan BEFORE.
+  var Two := AppliedByIdsNote(2, 0, 0, Thing, Done, Where);
+  Assert.IsTrue(Two.StartsWith('2 declaration(s) carry a fresh GUID now'),
+    'what happened, counted: ' + Two);
+  Assert.IsTrue(Two.Contains('BEFORE'),
+    'and that the rows describe the state before it: ' + Two);
+  Assert.IsFalse(Two.Contains('could NOT'), 'nothing failed: ' + Two);
+
+  // A partial apply names both halves, and an apply in which every named
+  // entry failed is not success with a footnote.
+  var Mixed := AppliedByIdsNote(1, 2, 0, Thing, Done, Where);
+  Assert.IsTrue(Mixed.StartsWith('1 declaration(s)'), 'the one that worked');
+  Assert.IsTrue(Mixed.Contains('2 could NOT be done'),
+    'and the two that did not: ' + Mixed);
+
+  var AllFailed := AppliedByIdsNote(0, 3, 0, Thing, Done, Where);
+  Assert.IsTrue(AllFailed.StartsWith('NOTHING was changed'),
+    'three named, three failed: ' + AllFailed);
+  Assert.IsTrue(AllFailed.Contains('3 declaration(s)'),
+    'and it says how many were named: ' + AllFailed);
+end;
+
+procedure TSelfProtectionTests.AnAnswerCarriesNoKeyTwice;
+var
+  O: TJSONObject;
+  Notes: Integer;
+begin
+  O := TJSONObject.Create;
+  try
+    // The shape of the report: two code paths both have something to say.
+    SetJsonNote(O, 'DelphiLSP returned nothing for this position.');
+    SetJsonNote(O, 'Unit1.pas was (re)sent 2 s ago - retry shortly.');
+
+    Notes := 0;
+    for var I := 0 to O.Count - 1 do
+      if O.Pairs[I].JsonString.Value = 'note' then Inc(Notes);
+    Assert.AreEqual(1, Notes,
+      'ONE "note" key, whatever how many places write it: ' + O.ToJSON);
+    Assert.AreEqual('Unit1.pas was (re)sent 2 s ago - retry shortly.',
+      O.GetValue<string>('note'), 'and it is the one that was set last');
+
+    // The first write still has to work on an object that has no note yet.
+    var P := TJSONObject.Create;
+    try
+      SetJsonNote(P, 'only one');
+      Assert.AreEqual('only one', P.GetValue<string>('note'), 'the first note');
+    finally
+      P.Free;
+    end;
+  finally
+    O.Free;
+  end;
 end;
 
 
@@ -6234,6 +7211,74 @@ begin
   Assert.AreEqual('ZZZZ', Unknown[0], 'an id nothing carries is named');
 end;
 
+procedure TFileEncodingCheckTests.NoCheckRewritesTheInstallation;
+var
+  Root, Own, Shipped: string;
+  Reader: TEncodingReader;
+  LineReader: TLineEndingReader;
+begin
+  // The two files of the reported shape: one of the project, one under
+  // the RAD Studio root the user had open in the editor.
+  Root := TPath.Combine(FDir, 'Studio');
+  TDirectory.CreateDirectory(TPath.Combine(Root, 'source'));
+  // A non-ASCII character, or the bytes are pure ASCII and the file is
+  // not an ANSI finding at all - the first run of this test said so.
+  Own := WriteRawEnc('Own.pas',
+    TEncoding.ASCII.GetBytes('unit Own; // Gr') + TBytes.Create($F6) +
+    TEncoding.ASCII.GetBytes('sse'#13#10));
+  Shipped := TPath.Combine(Root, 'source\IdHTTP.pas');
+  TFile.WriteAllBytes(Shipped,
+    TEncoding.ASCII.GetBytes('unit IdHTTP; // Gr') + TBytes.Create($F6) +
+    TEncoding.ASCII.GetBytes('sse'#13#10));
+
+  Reader :=
+    function(const AFile: string; out ABytes: TBytes): Boolean
+    begin
+      Result := TFile.Exists(AFile);
+      if Result then ABytes := TFile.ReadAllBytes(AFile);
+    end;
+
+  // Without a root both are findings - that is the state that shipped.
+  var All := CollectEncodingIssues([Own, Shipped], [secAnsi], secUtf8Bom,
+    Reader);
+  Assert.AreEqual(2, Integer(Length(All)),
+    'both are ANSI, so both qualify as far as the encoding goes');
+
+  // With it, the installation's file is gone and the project's stays.
+  var Mine := CollectEncodingIssues([Own, Shipped], [secAnsi], secUtf8Bom,
+    Reader, nil, Root);
+  Assert.AreEqual(1, Integer(Length(Mine)),
+    'the file under the RAD Studio root is NOT a finding');
+  Assert.AreEqual(LowerCase(Own), LowerCase(Mine[0].FileName),
+    'and the project''s own file still is');
+
+  // The same gate, same rule, for the line-ending check.
+  LineReader :=
+    function(const AFile: string; out ABytes: TBytes): Boolean
+    begin
+      Result := Reader(AFile, ABytes);
+    end;
+  var Ends := CollectLineEndingIssues(
+    [WriteRawEnc('Lf.pas', TEncoding.UTF8.GetBytes('unit Lf;'#10)),
+     TPath.Combine(Root, 'source\Lf2.pas')], LineReader, nil, Root);
+  TFile.WriteAllBytes(TPath.Combine(Root, 'source\Lf2.pas'),
+    TEncoding.UTF8.GetBytes('unit Lf2;'#10));
+  Ends := CollectLineEndingIssues(
+    [TPath.Combine(FDir, 'Lf.pas'), TPath.Combine(Root, 'source\Lf2.pas')],
+    LineReader, nil, Root);
+  Assert.AreEqual(1, Integer(Length(Ends)),
+    'the line-ending check applies the same rule');
+  Assert.IsFalse(Ends[0].FileName.Contains('Studio'),
+    'and it is the project''s file that is left');
+
+  // A path that only LOOKS like the root is none of it - "C:\Studio2"
+  // must not be swallowed by "C:\Studio".
+  Assert.IsFalse(UnderInstallRoot(Root + '2\X.pas', Root),
+    'the root is a FOLDER, not a prefix of the name');
+  Assert.IsFalse(UnderInstallRoot(Own, ''),
+    'no root given = the gate is off');
+end;
+
 procedure TFileEncodingCheckTests.TheEncodingToolDeclaresWhatItTakes;
 var
   Args: TArray<string>;
@@ -6255,6 +7300,65 @@ end;
 
 { TInstallOutputRootTests }
 
+
+procedure TInstallOutputRootTests.AFileInUseIsMovedAsideAndReplaced;
+var
+  Dir, Target, Source, Aside: string;
+  H: THandle;
+  Failed: Boolean;
+begin
+  Dir := TPath.Combine(TPath.GetTempPath, 'dih_inuse_' + TGUID.NewGuid.ToString);
+  TDirectory.CreateDirectory(Dir);
+  try
+    Target := TPath.Combine(Dir, 'tool.exe');
+    Source := TPath.Combine(Dir, 'new.bin');
+    TFile.WriteAllText(Target, 'OLD');
+    TFile.WriteAllText(Source, 'NEW');
+
+    // Exactly the shape a RUNNING image has: readers and renames are
+    // allowed, writers are not. FILE_SHARE_DELETE is what makes the move
+    // possible while the file is in use - a test that locks it outright
+    // would measure something else.
+    H := CreateFile(PChar(Target), GENERIC_READ,
+      FILE_SHARE_READ or FILE_SHARE_DELETE, nil, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL, 0);
+    Assert.IsTrue(H <> INVALID_HANDLE_VALUE, 'the probe must hold the file');
+    try
+      // The plain copy has to fail, or the test proves nothing.
+      Failed := False;
+      try
+        TFile.Copy(Source, Target, True);
+      except
+        Failed := True;
+      end;
+      Assert.IsTrue(Failed, 'a file in use cannot simply be overwritten');
+
+      Assert.IsTrue(ReplaceFilePossiblyInUse(Source, Target, Aside),
+        'but it can be replaced');
+      Assert.AreEqual('NEW', TFile.ReadAllText(Target), False,
+        'the new bytes are in place');
+      Assert.IsTrue(Aside <> '', 'and the old file was moved aside');
+      Assert.IsTrue(TFile.Exists(Aside), 'under a name that is still there');
+      Assert.AreEqual('OLD', TFile.ReadAllText(Aside), False,
+        'carrying what was installed before');
+      // The aside name must be UNIQUE: a fixed ".old" is held by whatever
+      // was started from it last time, and then the move has nowhere to go.
+      Assert.AreNotEqual(Target + '.old', Aside, False,
+        'a fixed aside name is what blocked the next install');
+    finally
+      CloseHandle(H);
+    end;
+
+    // With nothing holding it, the target is simply overwritten and no
+    // copy is left behind.
+    TFile.WriteAllText(Source, 'NEWER');
+    Assert.IsTrue(ReplaceFilePossiblyInUse(Source, Target, Aside), 'plain copy');
+    Assert.AreEqual('', Aside, False, 'nothing to move aside');
+    Assert.AreEqual('NEWER', TFile.ReadAllText(Target), False, 'replaced');
+  finally
+    TDirectory.Delete(Dir, True);
+  end;
+end;
 
 procedure TInstallOutputRootTests.ABuildNeverWritesWhereItMayNot;
 const

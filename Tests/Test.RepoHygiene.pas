@@ -61,6 +61,21 @@ type
     ///  trap in 1.10.1). A call that highlights NOTHING may of course go
     ///  to the line start.</summary>
     [Test] procedure NoGotoHighlightsFromTheLineStart;
+    /// <summary>Issue #47: the Close button of the two new result windows
+    ///  did nothing. ModalResult is a plain field that only ShowModal's
+    ///  loop ever reads (verified in Vcl.Forms: the property writes
+    ///  FModalResult and nothing else looks at it), so on a window shown
+    ///  with Show the click is a no-op - and so is Escape, which clicks
+    ///  that same button. Third time: 1.16.20 L3g was the first.</summary>
+    [Test] procedure NoModelessWindowClosesThroughModalResult;
+    /// <summary>Reported by a reviewing model (2026-10-19): an empty
+    ///  lsp_hover answer carried the key "note" TWICE - AddFreshNote adds
+    ///  it and the line after it added it again. That is valid JSON of
+    ///  which a parser keeps one pair, its choice, so one of the two
+    ///  sentences is lost at random. A sweep over every note of the lsp_*
+    ///  unit found that it was the only one, and the fix is structural:
+    ///  there the note goes through SetJsonNote, which REPLACES.</summary>
+    [Test] procedure TheLspToolsSetTheirNoteInsteadOfAppendingIt;
 
     /// <summary>MSBuild - and the IDE's own project builder, which is what
     ///  a bds.exe build uses - reads EVERY environment variable as a
@@ -74,6 +89,16 @@ type
     ///  full path. A build property may be SET to a configuration name,
     ///  never to a file path.</summary>
     [Test] procedure NoScriptPutsAPathIntoABuildProperty;
+
+    /// <summary>The refactor section of the menu is TWO alphabetical blocks
+    ///  (user 2026-10-16: "sortiert und mit einer Trennlinie zwischen 'mach
+    ///  etwas neu' und 'aendere etwas'"). With a dozen entries the question
+    ///  that costs time is "where does it stand?", and the answer must not
+    ///  depend on when an entry was added - which is exactly what happens
+    ///  when the next feature is appended at the end, as every entry of
+    ///  this menu was until now. BuildMenuTree is IDE-only (ToolsAPI), so
+    ///  this reads the SOURCE, like the other sweeps here.</summary>
+    [Test] procedure TheMenuRefactorBlocksStayAlphabetical;
   end;
 
 implementation
@@ -192,7 +217,7 @@ end;
 const
   // every batch script of the repository that uses labels
   ScriptFiles: array[0..4] of string = ('install.cmd', 'uninstall.cmd',
-    'rebuild.cmd', 'Mcp\buildmcp.cmd', 'dih\builddih.cmd');
+    'rebuild.cmd', 'release.cmd', 'dih\builddih.cmd');
 
 // A label line is ':name' - ':: text' is a comment, which is why the second
 // character decides.
@@ -216,23 +241,26 @@ end;
 
 procedure TRepoHygieneTests.TheBridgeIsMovedAsideUnderAUniqueName;
 var
-  Lines: TArray<string>;
-  MoveLine: string;
+  Config, Install: string;
 begin
-  var F := TPath.Combine(TPath.Combine(RepoRoot, 'Mcp'), 'buildmcp.cmd');
-  Assert.IsTrue(TFile.Exists(F), 'buildmcp.cmd must be there: ' + F);
-  Lines := TFile.ReadAllText(F).Replace(#13#10, #10).Split([#10]);
-  for var L in Lines do
-    if L.TrimLeft.StartsWith('if exist "%TARGET%" move', True) or
-       L.TrimLeft.StartsWith('move /y "%TARGET%"', True) then
-      MoveLine := L.Trim;
-  Assert.AreNotEqual('', MoveLine,
-    'the live exe must still be moved aside before the copy');
-  Assert.IsTrue(MoveLine.Contains('%RANDOM%'),
-    'and under a UNIQUE name, or an undeletable .old blocks the whole ' +
-    'install: ' + MoveLine);
-  Assert.IsFalse(MoveLine.Contains('"%TARGET%.old"'),
-    'the fixed name is exactly what broke it: ' + MoveLine);
+  // The behaviour this test was written for - moving a RUNNING exe aside
+  // under a unique name - lives in the installer now
+  // (DIH.FileOps.ReplaceFilePossiblyInUse), and
+  // TInstallOutputRootTests.AFileInUseIsMovedAsideAndReplaced proves it
+  // against a file that is really locked. What this one still has to hold
+  // is that the installer OWNS the bridge: while a second script built it,
+  // its result stood outside the installer's summary, and that is how a
+  // failure sat between two success messages for nine days (1.15.2).
+  Config := TFile.ReadAllText(
+    TPath.Combine(RepoRoot, 'DelphiRefactoringLight.xml'));
+  Assert.IsTrue(Config.Contains('RefactoringLightMcp.dproj'),
+    'the installer config must build the bridge itself');
+  Assert.IsTrue(Config.Contains('stage="after-build"'),
+    'and install the exe AFTER that build, or it installs the previous one');
+
+  Install := TFile.ReadAllText(TPath.Combine(RepoRoot, 'install.cmd'));
+  Assert.IsFalse(Install.ToLower.Contains('buildmcp'),
+    'nothing may build the bridge beside the installer again');
 end;
 
 procedure TRepoHygieneTests.InstallScripts_HaveNoLabelFallThrough;
@@ -359,6 +387,55 @@ begin
   Result := nil;
 end;
 
+procedure TRepoHygieneTests.NoModelessWindowClosesThroughModalResult;
+var
+  Offenders: TStringList;
+  Modeless: Integer;
+begin
+  var Root := RepoRoot;
+  Assert.IsTrue(Root <> '', 'the repository root must be found');
+  var Dir := TPath.Combine(Root, 'Source');
+  Assert.IsTrue(TDirectory.Exists(Dir), 'Source must be there: ' + Dir);
+
+  Offenders := TStringList.Create;
+  try
+    Modeless := 0;
+    for var F in TDirectory.GetFiles(Dir, '*.pas') do
+    begin
+      // Code only: the sentence explaining the rule names ModalResult.
+      var Lines := MaskCommentsAndStrings(SplitEditorLines(TFile.ReadAllText(F)));
+      var Text := string.Join(#10, Lines);
+      // A unit that shows a form MODELESS and never shows one modally:
+      // there, a ModalResult assignment can only ever be dead. A unit with
+      // both is out of reach of a textual sweep - the assignment may well
+      // belong to the modal dialog - which is the limit of this check and
+      // is why the two reported units are exactly the shape it catches.
+      if (Pos('.Show;', Text) = 0) or (Pos('ShowModal', Text) > 0) then Continue;
+      Inc(Modeless);
+      var P := Pos('ModalResult :=', Text);
+      if P > 0 then
+      begin
+        var Head := Copy(Text, 1, P - 1);
+        var LineStart := LastDelimiter(#10, Head) + 1;
+        Offenders.Add(Format('%s: %s - this unit shows its window with ' +
+          'Show, so ModalResult closes nothing; call Close',
+          [ExtractFileName(F),
+           Trim(Copy(Text, LineStart, Pos(#10, Text + #10, P) - LineStart))]));
+      end;
+    end;
+
+    // Without this the sweep could pass by finding no modeless window at
+    // all - a renamed Show would make it vacuous.
+    Assert.IsTrue(Modeless >= 3,
+      Format('the sweep must see the modeless result windows (saw %d)',
+        [Modeless]));
+    Assert.AreEqual('', Offenders.Text.Trim,
+      'a window shown with Show closes through Close, not ModalResult');
+  finally
+    Offenders.Free;
+  end;
+end;
+
 procedure TRepoHygieneTests.NoGotoHighlightsFromTheLineStart;
 const
   Call = 'GotoLocation(';
@@ -439,6 +516,95 @@ begin
     UpperCase(V).Contains('.XML');
 end;
 
+procedure TRepoHygieneTests.TheMenuRefactorBlocksStayAlphabetical;
+var
+  Blocks: TArray<TArray<string>>;
+
+  // Every Leaf/Plain row added directly to Root, in source order, split at
+  // the Sep(Root) calls. A Sub(Root, ...) row is a SUBMENU and deliberately
+  // not part of a block's sequence; a caption that is a CONSTANT (not a
+  // literal) belongs to another block and is skipped the same way.
+  procedure ReadMenu(const AText: string);
+  begin
+    Blocks := nil;
+    SetLength(Blocks, 1);
+    var Lines := AText.Replace(#13#10, #10).Split([#10]);
+    var InTree := False;
+    for var Raw in Lines do
+    begin
+      var L := Trim(StripLineComment(Raw));
+      if L.StartsWith('function TContextMenuInstaller.BuildMenuTree') then
+        InTree := True
+      else if InTree and (L = 'Result := Root;') then
+        Break
+      else if InTree then
+      begin
+        if L.StartsWith('Sep(Root)') then
+          SetLength(Blocks, Length(Blocks) + 1)
+        else if L.StartsWith('Leaf(Root,') or L.StartsWith('Plain(Root,') then
+        begin
+          var P := Pos('''', L);
+          if P > 0 then
+          begin
+            var Rest := Copy(L, P + 1, MaxInt);
+            var E := Pos('''', Rest);
+            if E > 1 then
+            begin
+              var Cap := Copy(Rest, 1, E - 1);
+              Blocks[High(Blocks)] := Blocks[High(Blocks)] + [Cap];
+            end;
+          end;
+        end;
+      end;
+    end;
+  end;
+
+  function OutOfOrder(const ABlock: TArray<string>): string;
+  begin
+    Result := '';
+    for var I := 1 to High(ABlock) do
+      if CompareText(ABlock[I - 1], ABlock[I]) > 0 then
+        Exit(Format('"%s" stands before "%s"', [ABlock[I - 1], ABlock[I]]));
+  end;
+
+begin
+  var Root := RepoRoot;
+  Assert.IsTrue(Root <> '', 'the repository root must be found');
+  var Menu := TPath.Combine(TPath.Combine(Root, 'Source'), 'Expert.ContextMenu.pas');
+  Assert.IsTrue(TFile.Exists(Menu), 'Expert.ContextMenu.pas must be there');
+
+  ReadMenu(TFile.ReadAllText(Menu, TEncoding.UTF8));
+
+  // Guard against a vacuous pass: a renamed helper or a reshaped tree would
+  // otherwise leave two empty "sorted" blocks behind.
+  Assert.IsTrue(Length(Blocks) >= 5, Format(
+    'the menu tree must still have its separated groups (found %d)',
+    [Length(Blocks)]));
+  // three since 2.6.0: "Move to new unit..." and "Move to unit..." became
+  // one entry whose dialog settles the target
+  Assert.IsTrue(Length(Blocks[0]) >= 3, Format(
+    'block 1 (create something new) must carry its entries (found %d)',
+    [Length(Blocks[0])]));
+  Assert.IsTrue(Length(Blocks[1]) >= 8, Format(
+    'block 2 (change what is there) must carry its entries (found %d)',
+    [Length(Blocks[1])]));
+
+  Assert.AreEqual('', OutOfOrder(Blocks[0]),
+    'the "create something new" block is alphabetical');
+  Assert.AreEqual('', OutOfOrder(Blocks[1]),
+    'the "change what is there" block is alphabetical');
+
+  // And the two tools with a scope dialog belong to the project-wide group,
+  // not to the cursor blocks - "Project checks" sits right after them.
+  var AtCursor := '';
+  for var C in Blocks[0] do AtCursor := AtCursor + C + '|';
+  for var C in Blocks[1] do AtCursor := AtCursor + C + '|';
+  Assert.IsFalse(AtCursor.Contains('Remove with'),
+    'Remove with is a project-wide tool, not a cursor refactoring');
+  Assert.IsFalse(AtCursor.Contains('Expand include files'),
+    'Expand include files is a project-wide tool');
+end;
+
 procedure TRepoHygieneTests.NoScriptPutsAPathIntoABuildProperty;
 var
   Offenders: TStringList;
@@ -478,6 +644,41 @@ begin
     Assert.AreEqual('', Offenders.Text.Trim, Offenders.Text);
   finally
     SL.Free;
+    Offenders.Free;
+  end;
+end;
+
+procedure TRepoHygieneTests.TheLspToolsSetTheirNoteInsteadOfAppendingIt;
+var
+  Offenders: TStringList;
+  Sets: Integer;
+begin
+  var Root := RepoRoot;
+  Assert.IsTrue(Root <> '', 'the repository root must be found');
+  var F := TPath.Combine(Root, 'Source\Expert.McpLspTools.pas');
+  Assert.IsTrue(TFile.Exists(F), 'the unit must be there: ' + F);
+
+  Offenders := TStringList.Create;
+  try
+    Sets := 0;
+    var Lines := TFile.ReadAllLines(F);
+    for var I := 0 to High(Lines) do
+    begin
+      // CODE only - the comment above the fix names AddPair to say why it
+      // is not used, and a sweep that counts prose finds the fix instead
+      // of the defect (the lesson of the GetCurrentContext sweep).
+      var L := StripLineComment(Lines[I]);
+      if Pos('SetJsonNote(', L) > 0 then Inc(Sets);
+      if Pos('AddPair(''note''', L) > 0 then
+        Offenders.Add(Format('Expert.McpLspTools.pas(%d): %s - a second ' +
+          'AddPair(''note'') is a DUPLICATE KEY; use SetJsonNote, which ' +
+          'replaces', [I + 1, Trim(L)]));
+    end;
+    // Vacuous otherwise: a renamed helper would make this pass silently.
+    Assert.IsTrue(Sets >= 2,
+      Format('the notes must go through SetJsonNote, found %d call(s)', [Sets]));
+    Assert.AreEqual('', Offenders.Text.Trim, Offenders.Text);
+  finally
     Offenders.Free;
   end;
 end;

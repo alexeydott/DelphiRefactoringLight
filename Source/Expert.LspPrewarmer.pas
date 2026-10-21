@@ -64,8 +64,13 @@ type
     // to call GetClient. The latest request is parked here instead and the
     // worker picks it up when it is done.
     FPending: string;
+    // FPending came from RestartFor: run it even for the project that was
+    // just warmed - the session it warmed is the one lsp_restart ended.
+    FPendingRestart: Boolean;
     FLastProject: string;
     procedure StartPrewarmFor(const AProjectFile: string);
+    function TryStartPrewarm(const AProjectFile: string;
+      out AReason: string): Boolean;
   public
     constructor Create;
     destructor Destroy; override;
@@ -77,6 +82,14 @@ type
     ///  project file. Kicks off the background prewarm.</summary>
     procedure HandleProjectOpened(const AProjectFile: string);
     procedure HandleProjectSwitched(const AProjectFile: string);
+    /// <summary>Starts a NEW session for AProjectFile after
+    ///  TLspManager.Reset - main thread only. Unlike HandleProjectOpened it
+    ///  is neither debounced nor subject to PrewarmLspOnProjectOpen: it is
+    ///  an explicit request. True only when a start really began; while an
+    ///  earlier start is still running the request is parked instead
+    ///  (AQueued) and runs when that one finishes. AReason says why not.</summary>
+    function RestartFor(const AProjectFile: string; out AQueued: Boolean;
+      out AReason: string): Boolean;
   end;
 
 var
@@ -283,27 +296,75 @@ begin
     end);
 end;
 
+function TLspPrewarmer.RestartFor(const AProjectFile: string;
+  out AQueued: Boolean; out AReason: string): Boolean;
+begin
+  Result := False;
+  AQueued := False;
+  AReason := '';
+  if AProjectFile = '' then
+  begin
+    AReason := 'no project is open';
+    Exit;
+  end;
+  // The notifier's debounce compares against this - keep it current, or
+  // the next real open of the same project would be taken for a re-open.
+  FLastProject := AProjectFile;
+  if FInFlight then
+  begin
+    // A start begun before the reset is still running and may finish on
+    // the session that was just ended - this one follows it.
+    FPending := AProjectFile;
+    FPendingRestart := True;
+    AQueued := True;
+    AReason := 'an earlier start is still running; the new session ' +
+      'starts as soon as it has finished';
+    Exit;
+  end;
+  Result := TryStartPrewarm(AProjectFile, AReason);
+end;
+
 procedure TLspPrewarmer.StartPrewarmFor(const AProjectFile: string);
+var
+  Reason: string;
+begin
+  TryStartPrewarm(AProjectFile, Reason);
+end;
+
+function TLspPrewarmer.TryStartPrewarm(const AProjectFile: string;
+  out AReason: string): Boolean;
 var
   RootPath, DelphiLspJson: string;
   ScanFiles: TArray<string>;
 begin
+  Result := False;
+  AReason := '';
   if FInFlight then
   begin
     // not dropped: remembered, and run when the current one finishes
     FPending := AProjectFile;
+    AReason := 'a start is already running; this one is queued behind it';
     Exit;
   end;
   FPending := '';
+  FPendingRestart := False;
 
   // Resolve config bits on the main thread (ToolsAPI is single-threaded).
   RootPath := Editor.GetProjectRoot;
   if RootPath = '' then
     RootPath := ExtractFilePath(AProjectFile);
   DelphiLspJson := Editor.FindDelphiLspJson;
-  if DelphiLspJson = '' then Exit;
+  if DelphiLspJson = '' then
+  begin
+    AReason := 'the project has no .delphilsp.json';
+    Exit;
+  end;
   ScanFiles := Editor.GetProjectSourceFiles;
-  if Length(ScanFiles) = 0 then Exit;
+  if Length(ScanFiles) = 0 then
+  begin
+    AReason := 'the project lists no source files';
+    Exit;
+  end;
 
   FInFlight := True;
   // Counted worker (A7): the cold start takes 10-30 s, and unloading the
@@ -332,13 +393,16 @@ begin
           procedure
           begin
             var Next := FPending;
+            var Restart := FPendingRestart;
             FPending := '';
-            // Only when it really differs from what we just warmed - and
-            // only while a session is wanted at all, the same condition
-            // the notifier uses.
-            if (Next <> '') and not SameText(Next, AProjectFile)
+            FPendingRestart := False;
+            // A parked RESTART always runs - it was asked for explicitly.
+            // Anything else only when it really differs from what we just
+            // warmed, and only while a session is wanted at all, the same
+            // condition the notifier uses.
+            if (Next <> '') and (Restart or (not SameText(Next, AProjectFile)
               and (TPluginSettings.PrewarmLspOnProjectOpen
-                   or (TLspManager.Instance.PeekClient <> nil)) then
+                   or (TLspManager.Instance.PeekClient <> nil)))) then
               StartPrewarmFor(Next);
           end);
       end;
@@ -346,7 +410,11 @@ begin
   begin
     FInFlight := False;   // shutdown began - nothing was started
     FPending := '';
+    FPendingRestart := False;
+    AReason := 'the plugin is shutting down';
+    Exit;
   end;
+  Result := True;
 end;
 
 end.

@@ -75,6 +75,8 @@ contains
   Expert.LineEndingWatcher in '..\Source\Expert.LineEndingWatcher.pas',
   Expert.LineEndingDialog in '..\Source\Expert.LineEndingDialog.pas',
   Expert.FileEncodingCheck in '..\Source\Expert.FileEncodingCheck.pas',
+  Expert.UnusedUnits in '..\Source\Expert.UnusedUnits.pas',
+  Expert.UnusedUnitsDialog in '..\Source\Expert.UnusedUnitsDialog.pas',
   Expert.IdentifierCheck in '..\Source\Expert.IdentifierCheck.pas',
   Expert.SignatureCheck in '..\Source\Expert.SignatureCheck.pas',
   Expert.SignatureCheckDialog in '..\Source\Expert.SignatureCheckDialog.pas',

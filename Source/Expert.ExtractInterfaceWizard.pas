@@ -46,11 +46,6 @@ procedure AddToExistingInterface;
 ///  reference drops.</summary>
 procedure DelegateInterfaceImplementation;
 
-/// <summary>Extract-interface without any UI: APREVIEW returns the
-///  interface text that WOULD be written (AInterfaceText) and the parsed
-///  class in AInfo, otherwise the same apply the dialog triggers runs.
-///  AMEMBERS (member names) replaces the dialog's selection; empty = the
-///  dialog's default (public + published methods and properties).
 /// <summary>Adds IInterface support to the class at (AFile, ALine1) without
 ///  any UI. APREVIEW writes nothing and returns the generated declaration
 ///  and implementation in AReport; otherwise AReport is the summary the menu
@@ -58,11 +53,22 @@ procedure DelegateInterfaceImplementation;
 function DelegateIInterfaceHeadless(const AFile: string; ALine1: Integer;
   APreview: Boolean; out AReport, AError: string): Boolean;
 
+/// <summary>Extract-interface without any UI: APREVIEW returns the
+///  interface text that WOULD be written (AInterfaceText) and the parsed
+///  class in AInfo, otherwise the same apply the dialog triggers runs.
+///  AMEMBERS (member names) replaces the dialog's selection; empty = the
+///  dialog's default (public + published methods and properties).
+///  ACHANGEBASETO is a base class to derive from instead, applied with the
+///  extraction - AInfo.IInterface suggests one when the class cannot carry
+///  an interface as it stands (issue #46); '' leaves the ancestor alone.
+///  AADDIINTERFACE is the other half of that offer: QueryInterface /
+///  _AddRef / _Release go into the CLASS, its ancestor stays.
 ///  MAIN THREAD.</summary>
 function ExtractInterfaceHeadless(const AFile: string; ALine1: Integer;
   AAddToExisting: Boolean; const AInterfaceName, ATargetFile: string;
   const AMembers: TArray<string>; APreview: Boolean;
-  out AInfo: TExtractInterfaceInfo; out AInterfaceText, AError: string): Boolean;
+  out AInfo: TExtractInterfaceInfo; out AInterfaceText, AError: string;
+  const AChangeBaseTo: string = ''; AAddIInterface: Boolean = False): Boolean;
 
 implementation
 
@@ -74,6 +80,9 @@ uses
   {$IFNDEF STANDALONE_BUILD}ToolsAPI,{$ENDIF} 
   Expert.EditorHelperIntf, Expert.ExtractInterfaceDialog,   // engine: interface uses
   Expert.DialogHelper, Expert.LspManager, Lsp.Client, Lsp.Uri, Lsp.Protocol,
+  Expert.InterfaceLinks, Expert.ScopeFiles,
+  Expert.MethodEdit, Expert.UnitIndex,   // the units the interface needs
+  Expert.UsesEditor,   // the existing target gets what it needs
   Delphi.FileEncoding, Expert.PascalScanner;
 
 function StringListToArray(ASL: TStringList): TArray<string>;
@@ -220,6 +229,13 @@ type
     TypesResolved: Integer;
     LspAvailable: Boolean;
     LspError: string;
+    /// <summary>The target unit was there and got the interface ADDED -
+    /// the message says which of the two happened.</summary>
+    ExtendedExisting: Boolean;
+    /// <summary>Units the interface needs that could not be added to an
+    /// existing target's uses clause (a conditional clause, say). Named
+    /// rather than written in silence.</summary>
+    UnresolvedNote: string;
   end;
 
 type
@@ -231,6 +247,45 @@ type
     ///  walking the whole file.</summary>
     SourceLine: Integer;
   end;
+
+/// <summary>The units the INTERFACE TEXT itself needs, for what DelphiLSP
+///  could not resolve: every identifier of the generated interface is
+///  looked up in the identifier index, and a unit is only named when the
+///  SOURCE unit's own uses clause has it - the class compiled there, so
+///  that is where its types come from. The same rule the method move
+///  follows (1.21.0).
+///  WHY, user 2026-10-17: "In der Interfaceunit sind alle Units in der
+///  uses kopiert. Dabei will man mit Interfaces ja gerade entkoppeln." The
+///  fallback used to be the source's WHOLE interface-uses clause, which is
+///  exactly the coupling an extracted interface is meant to remove.</summary>
+function UnitsTheInterfaceNeeds(const AInfo: TExtractInterfaceInfo;
+  const ASoFar: TArray<string>; out AIdents: TArray<string>): TArray<string>;
+var
+  Info: TExtractInterfaceInfo;
+  Snap: IUnitSnapshot;
+begin
+  Result := nil;
+  AIdents := nil;
+  Snap := TUnitIndex.Instance.Snapshot;
+  if Snap = nil then Exit;
+  Info := AInfo;
+  Info.NewUnitUses := ASoFar;
+  Result := UnitsMovedCodeNeeds(
+    ReadSourceLines(AInfo.SourceFile),
+    SplitEditorLines(TExtractInterfaceEngine.BuildNewUnitText(Info)),
+    SplitEditorLines(TExtractInterfaceEngine.BuildInterfaceText(Info)),
+    function(const AIdent: string): TArray<string>
+    begin
+      Result := nil;
+      for var H in Snap.Lookup(AIdent) do
+      begin
+        var Known := False;
+        for var U in Result do
+          if SameText(U, H.UnitName) then Known := True;
+        if not Known then Result := Result + [H.UnitName];
+      end;
+    end, AIdents);
+end;
 
 function ResolveUsesViaLsp(const ASourceFile: string;
   const AMembers: TArray<TClassMember>;
@@ -553,6 +608,104 @@ begin
   finally
     Buf.Free;
   end;
+end;
+
+procedure EnsureUsesContainsInLines(var ALines: TArray<string>;
+  const AUnitName: string); forward;
+
+{ ---------- IInterface: what the class needs before it can carry one ----------
+
+  Extracting an interface rewrites the class header to "TFoo = class(TBase,
+  IFoo)", and that only compiles when the class provides IInterface's three
+  methods. Issue #46 reported the consequence: the extracted interface was
+  right and the class stopped compiling, because it descended from TObject.
+  The rule itself is pure (TExtractInterfaceEngine.IInterfaceNeedOf); what
+  lives here is the part that needs the IDE - resolving a base class we do
+  not know by name through the type graph and the identifier index. }
+
+/// <summary>Walks a base class's ancestors: ibkImplements as soon as one of
+///  them lists IInterface / IUnknown or is a known implementer, ibkOther
+///  when the chain is resolved and ends without one (changing THAT ancestor
+///  would drop the chain), ibkUnknown when a name cannot be resolved -
+///  which is reported rather than guessed at.</summary>
+function IInterfaceBaseResolverFor(AGraph: TTypeGraph): TIInterfaceBaseResolver;
+begin
+  Result :=
+    function(const ABaseClass: string): TIInterfaceBaseKind
+    var
+      Name: string;
+      Decl: TTypeDecl;
+    begin
+      Name := ABaseClass;
+      // A hierarchy, not a cycle - but a broken source could be one.
+      for var Step := 1 to 16 do
+      begin
+        case TExtractInterfaceEngine.KnownIInterfaceBaseKind(Name) of
+          ibkImplements: Exit(ibkImplements);
+          // TObject / TPersistent: resolved, and nothing on the way
+          // implemented it.
+          ibkTObjectLike: Exit(ibkOther);
+        end;
+        if (AGraph = nil) or not AGraph.FindType(Name, Decl) then Exit(ibkUnknown);
+        if Decl.IsInterface then Exit(ibkUnknown);
+        for var Parent in Decl.Parents do
+          if SameText(Parent, 'IInterface') or SameText(Parent, 'IUnknown') then
+            Exit(ibkImplements);
+        // "TFoo = class" with no list is a TObject descendant.
+        if Length(Decl.Parents) = 0 then Exit(ibkOther);
+        Name := Decl.Parents[0];
+      end;
+      Result := ibkUnknown;
+    end;
+end;
+
+/// <summary>Fills AInfo.IInterface. The graph is built over the source file
+///  alone and resolves everything else through the identifier index, so a
+///  VCL base (TForm -> ... -> TComponent) costs a handful of lookups and no
+///  project scan. Main thread: the reader looks at editor buffers.</summary>
+procedure FillIInterfaceVerdict(const ALines: TArray<string>;
+  var AInfo: TExtractInterfaceInfo);
+var
+  Graph: TTypeGraph;
+begin
+  Graph := nil;
+  try
+    try
+      Graph := TTypeGraph.Create([AInfo.SourceFile], EditorOrDiskReader());
+    except
+      // Without a graph only the names the engine knows are decided, and
+      // the verdict says "could not be determined" for the rest. A failing
+      // index must never cost the extraction.
+      Graph := nil;
+    end;
+    AInfo.IInterface := TExtractInterfaceEngine.IInterfaceNeedOf(ALines,
+      AInfo.ClassDeclLine, AInfo.ClassEndLine, AInfo.ClassName,
+      IInterfaceBaseResolverFor(Graph));
+  finally
+    Graph.Free;
+  end;
+end;
+
+/// <summary>Changes the class's base class when AInfo asks for it. Runs
+///  BEFORE the interface joins the ancestor list, because the plan replaces
+///  the FIRST entry - which the interface would otherwise be.</summary>
+procedure ChangeBaseClassInLines(var ALines: TArray<string>; ADeclLine: Integer;
+  const AInfo: TExtractInterfaceInfo);
+var
+  NewLine, Why: string;
+begin
+  if Trim(AInfo.ChangeBaseTo) = '' then Exit;
+  if (ADeclLine < 1) or (ADeclLine > Length(ALines)) then Exit;
+  if not TExtractInterfaceEngine.PlanBaseClassChange(ALines[ADeclLine - 1],
+    AInfo.ChangeBaseTo, NewLine, Why) then
+    raise Exception.CreateFmt(
+      'The ancestor of %s was not changed to %s: %s. Nothing was written.',
+      [AInfo.ClassName, AInfo.ChangeBaseTo, Why]);
+  ALines[ADeclLine - 1] := NewLine;
+  // TInterfacedObject lives in System, which needs no uses entry;
+  // TInterfacedPersistent is declared in System.Classes.
+  if SameText(AInfo.ChangeBaseTo, 'TInterfacedPersistent') then
+    EnsureUsesContainsInLines(ALines, 'System.Classes');
 end;
 
 procedure AddAncestorToClassLines(var ALines: TArray<string>; ADeclLine: Integer;
@@ -900,6 +1053,31 @@ begin
   end;
 end;
 
+/// <summary>Carries out the "add IInterface support" half of the offer,
+///  after the extraction has been written. It parses the class out of the
+///  FILE, so it runs last and finds the class again BY NAME - the
+///  extraction moved its line. A failure raises: the interface is on disk
+///  by then, and saying nothing would leave a class that does not
+///  compile.</summary>
+procedure AddIInterfaceSupportIfAsked(const AInfo: TExtractInterfaceInfo);
+var
+  Lines: TArray<string>;
+  DeclLine, EndLine: Integer;
+  Report, Error: string;
+begin
+  if not AInfo.AddIInterface then Exit;
+  Lines := ReadSourceLines(AInfo.SourceFile);
+  if not TExtractInterfaceEngine.RelocateClass(Lines, AInfo.ClassName,
+    AInfo.ClassDeclLine, DeclLine, EndLine) then
+    raise Exception.CreateFmt('The interface was written, but %s could not ' +
+      'be found again - IInterface support was NOT added. Use "Add ' +
+      'IInterface support to class" on it.', [AInfo.ClassName]);
+  if not DelegateIInterfaceHeadless(AInfo.SourceFile, DeclLine, False,
+    Report, Error) then
+    raise Exception.CreateFmt('The interface was written, but IInterface ' +
+      'support could not be added: %s', [Error]);
+end;
+
 procedure ApplyExtractNew(const AInfo: TExtractInterfaceInfo;
   out AStats: TResolveUsesStats; AStatusCallback: TProc<string>);
 var
@@ -909,10 +1087,6 @@ var
   Lines: TArray<string>;
 begin
   AStats := Default(TResolveUsesStats);
-  if TFile.Exists(AInfo.TargetFile) then
-    if MessageDlg('Target file already exists. Overwrite?' + sLineBreak +
-        AInfo.TargetFile, mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
-      Exit;
 
   // 1. Create the new interface unit on disk, register it with the
   //    active project and open it in the IDE so the user can see it.
@@ -927,25 +1101,56 @@ begin
     // full interface-uses when LSP delivers nothing.
     InfoWithUses.NewUnitUses := ResolveUsesViaLsp(AInfo.SourceFile, AInfo.Members,
       AStatusCallback, AStats);
-    // Safety net: if LSP did not (or could not) resolve every type we
-    // collected, top off the uses with the source unit's own
-    // interface-uses. The list stays minimal when LSP resolved
-    // everything, but does not leave the new unit uncompilable when
-    // resolution was partial (e.g. because the source still has its
-    // own uses-issue that prevents LSP from resolving from its
-    // perspective).
+    // What LSP could not resolve is looked up by IDENTIFIER instead -
+    // NOT by copying the source's whole uses clause, which is the
+    // coupling the extraction exists to remove (user, 2026-10-17).
     if (not AStats.LspAvailable) or
        (AStats.TypesResolved < AStats.TypesAttempted) then
+    begin
+      var Idents: TArray<string>;
       InfoWithUses.NewUnitUses := UnionUnitNames(
         InfoWithUses.NewUnitUses,
-        ExtractInterfaceUses(AInfo.SourceFile));
-    UnitText := TExtractInterfaceEngine.BuildNewUnitText(InfoWithUses);
+        UnitsTheInterfaceNeeds(InfoWithUses, InfoWithUses.NewUnitUses,
+          Idents));
+    end;
+    // An EXISTING target unit is EXTENDED, not replaced (user,
+    // 2026-10-17). Overwriting it is what the version before offered,
+    // and a unit that already holds interfaces is exactly where the next
+    // one belongs.
+    if TFile.Exists(AInfo.TargetFile) then
+    begin
+      var Existing := ReadSourceLines(AInfo.TargetFile);
+      var Why: string;
+      var NewLines: TArray<string>;
+      if not PlanInterfaceIntoUnit(Existing,
+        InfoWithUses.InterfaceName,
+        TExtractInterfaceEngine.BuildInterfaceText(InfoWithUses),
+        NewLines, Why) then
+        raise Exception.CreateFmt('Nothing was written: %s.', [Why]);
+      // Its OWN uses clause gets what the new interface needs - the same
+      // list the new unit would have carried.
+      var Content := string.Join(sLineBreak, NewLines);
+      for var U in InfoWithUses.NewUnitUses do
+      begin
+        var WithUse: string;
+        if PlanAddUnitToUsesText(Content, U, usInterface, WithUse) then
+          Content := WithUse
+        else
+          AStats.UnresolvedNote := AStats.UnresolvedNote +
+            IfThen(AStats.UnresolvedNote = '', '', ', ') + U;
+      end;
+      WriteTextEnc(AInfo.TargetFile, Content);
+      AStats.ExtendedExisting := True;
+      UnitText := '';
+    end
+    else
+      UnitText := TExtractInterfaceEngine.BuildNewUnitText(InfoWithUses);
   end;
   // The new unit is written, but it is NOT handed to the project yet
   // (audit #39, L7h): the source edit below can fail - a read-only file,
   // a refused editor write - and the project then held an interface unit
   // for an extraction that never happened. Both steps happen at the end.
-  WriteTextEnc(AInfo.TargetFile, UnitText);
+  if UnitText <> '' then WriteTextEnc(AInfo.TargetFile, UnitText);
 
   UnitName := ChangeFileExt(ExtractFileName(AInfo.TargetFile), '');
 
@@ -973,6 +1178,7 @@ begin
     SynthesiseAllPropertiesOnLines(Lines, AInfo.ClassDeclLine, AInfo.ClassEndLine, NeedSynth);
     AppendImplementationsInLines(Lines, AInfo.ClassName, NeedSynth);
   end;
+  ChangeBaseClassInLines(Lines, AInfo.ClassDeclLine, AInfo);
   AddAncestorToClassLines(Lines, AInfo.ClassDeclLine, AInfo.InterfaceName);
   EnsureUsesContainsInLines(Lines, UnitName);
 
@@ -982,6 +1188,7 @@ begin
   // a file nobody added to the project is harmless - but the project is
   // not changed behind a failure.
   WriteSourceLines(AInfo.SourceFile, Lines);
+  AddIInterfaceSupportIfAsked(AInfo);
   AddFileToActiveProject(AInfo.TargetFile);
   OpenModuleInIDE(AInfo.TargetFile);
 end;
@@ -1147,6 +1354,7 @@ begin
       SynthesiseAllPropertiesOnLines(SrcLines, ClassDecl, ClassEnd, NeedSynth);
       AppendImplementationsInLines(SrcLines, AInfo.ClassName, NeedSynth);
     end;
+    ChangeBaseClassInLines(SrcLines, ClassDecl, AInfo);
     for var Target in AInfo.Targets do
     begin
       AddAncestorToClassLines(SrcLines, ClassDecl, Target.InterfaceName);
@@ -1156,6 +1364,7 @@ begin
           ChangeFileExt(ExtractFileName(Target.FileName), ''));
     end;
     WriteSourceLines(AInfo.SourceFile, SrcLines);
+    AddIInterfaceSupportIfAsked(AInfo);
     Exit;
   end;
 
@@ -1252,6 +1461,7 @@ begin
     SynthesiseAllPropertiesOnLines(SrcLines, ClassDecl, ClassEnd, NeedSynth);
     AppendImplementationsInLines(SrcLines, AInfo.ClassName, NeedSynth);
   end;
+  ChangeBaseClassInLines(SrcLines, ClassDecl, AInfo);
   AddAncestorToClassLines(SrcLines, ClassDecl, AInfo.InterfaceName);
   // an interface in the class's own unit needs no uses entry
   if not SameFileName(AInfo.ExistingFile, AInfo.SourceFile) then
@@ -1272,7 +1482,8 @@ end;
 function ExtractInterfaceHeadless(const AFile: string; ALine1: Integer;
   AAddToExisting: Boolean; const AInterfaceName, ATargetFile: string;
   const AMembers: TArray<string>; APreview: Boolean;
-  out AInfo: TExtractInterfaceInfo; out AInterfaceText, AError: string): Boolean;
+  out AInfo: TExtractInterfaceInfo; out AInterfaceText, AError: string;
+  const AChangeBaseTo: string; AAddIInterface: Boolean): Boolean;
 var
   Lines: TArray<string>;
   Info: TExtractInterfaceInfo;
@@ -1302,6 +1513,11 @@ begin
     AError := Format('no class declaration found around line %d', [ALine1]);
     Exit;
   end;
+  // Issue #46: whether the class can carry an interface at all is part of
+  // the answer, not something the caller finds out from the compiler.
+  FillIInterfaceVerdict(Lines, Info);
+  Info.ChangeBaseTo := AChangeBaseTo;
+  Info.AddIInterface := AAddIInterface;
   if AAddToExisting then Info.Mode := eimAddToExisting
   else Info.Mode := eimExtractNew;
 
@@ -1414,6 +1630,7 @@ begin
     ShowThemedMessage('No class declaration found around the cursor.');
     Exit;
   end;
+  FillIInterfaceVerdict(Lines, Info);
 
   Info.Mode := AMode;
 
@@ -1492,7 +1709,8 @@ begin
     if not Stats.LspAvailable then
       Diag := Diag + '  - LSP client could not be acquired (' +
         IfThen(Stats.LspError = '', LspConfigMissingHint, Stats.LspError) + ').' + sLineBreak +
-        '  - Fell back to the source unit''s full interface-uses.'
+        '  - The units were derived from the interface''s own ' +
+        'identifiers instead.'
     else
       Diag := Diag + Format(
         '  - %d distinct type(s) collected from selected members.' + sLineBreak +
@@ -1501,8 +1719,13 @@ begin
         [Stats.TypesAttempted, Stats.TypesResolved,
          Stats.TypesAttempted - Stats.TypesResolved]);
 
+    if Stats.UnresolvedNote <> '' then
+      Diag := Diag + sLineBreak + sLineBreak + 'Not added to the target''s ' +
+        'uses clause (add them by hand): ' + Stats.UnresolvedNote + '.';
     ShowThemedMessage('Interface ' +
-      IfThen(AMode = eimExtractNew, 'extracted to ' + Result_.TargetFile,
+      IfThen(AMode = eimExtractNew,
+        IfThen(Stats.ExtendedExisting, 'added to the existing unit ',
+          'extracted to ') + Result_.TargetFile,
                                      'extended in ' + Result_.ExistingFile)
       + '.' + Diag);
   except
@@ -1679,7 +1902,7 @@ var
   Lines: TArray<string>;
   Info: TExtractInterfaceInfo;
   DeclBlock, ImplBlock: string;
-  BaseIsTObjectLike, HasNewInst, HasAfterCtor: Boolean;
+  HasNewInst, HasAfterCtor: Boolean;
   BaseDesc, ExtraNote: string;
   InjectNewInstOK, InjectAfterCtorOK: Boolean;
 begin
@@ -1700,37 +1923,27 @@ begin
     Exit;
   end;
 
-  // Skip if the class already lists IInterface / IUnknown.
-  var Ancestors := TExtractInterfaceEngine.ParseClassAncestors(
-    Lines[Info.ClassDeclLine - 1], BaseClass);
-  for var A in Ancestors do
-    if SameText(A, 'IInterface') or SameText(A, 'IUnknown') then
-    begin
-      AError := Format(
-        'class %s already lists %s in its ancestor list - nothing to do',
-        [Info.ClassName, A]);
-      Exit;
-    end;
-
-  // A base that already implements IInterface: the code below would
-  // redeclare what it inherits.
-  for var Implementing in ['TInterfacedObject', 'TAggregatedObject',
-    'TContainedObject'] do
-    if SameText(BaseClass, Implementing) then
-    begin
-      AError := Format('class %s descends from %s, which already implements ' +
-        'IInterface - nothing to do', [Info.ClassName, BaseClass]);
-      Exit;
-    end;
-
-  // Heuristic on base class. TObject / TPersistent have no virtual
-  // IInterface methods to override; everything else we treat as a
-  // TComponent descendant, where only QueryInterface is virtual:
-  // "override" on its static _AddRef/_Release does not compile (E2170).
-  // Users with an exotic base can adjust the generated `override`
-  // keywords by hand.
-  BaseIsTObjectLike := (BaseClass = '') or
-    SameText(BaseClass, 'TObject') or SameText(BaseClass, 'TPersistent');
+  // Who provides IInterface is ONE rule (issue #46), the same one the
+  // extraction warns with - so the two can never disagree about it. It
+  // also resolves a base class by its CHAIN instead of by a hand-kept
+  // list of three RTL names, which is what made a vendor class derived
+  // from TComponent look like a candidate here.
+  FillIInterfaceVerdict(Lines, Info);
+  BaseClass := Info.IInterface.BaseClass;
+  if Info.IInterface.Ok then
+  begin
+    AError := Format('%s - nothing to do', [Info.IInterface.Reason]);
+    Exit;
+  end;
+  // PART of IInterface by hand: generating all three would redeclare what
+  // is already there (E2007). Note the difference to the ancestor LIST
+  // naming IInterface while nothing implements it - that one is exactly
+  // the case this feature is for, so it is no longer refused.
+  if Length(Info.IInterface.Missing) < 3 then
+  begin
+    AError := Format('%s. %s', [Info.IInterface.Reason, Info.IInterface.Offer]);
+    Exit;
+  end;
 
   // Detect whether the class already declares NewInstance and/or
   // AfterConstruction. We must NOT re-declare them (would trip E2007),
@@ -1741,23 +1954,10 @@ begin
   HasAfterCtor := TExtractInterfaceEngine.ClassHasMethodDecl(
     Lines, Info.ClassDeclLine, Info.ClassEndLine, 'AfterConstruction');
 
-  DeclBlock :=
-    '    FRefCount: Integer;' + sLineBreak +
-    '  protected' + sLineBreak +
-    '    function QueryInterface(const IID: TGUID; out Obj): HResult; ' +
-      TExtractInterfaceEngine.IInterfaceDirective(BaseClass, 'QueryInterface') + 'stdcall;' + sLineBreak +
-    '    function _AddRef: Integer; ' +
-      TExtractInterfaceEngine.IInterfaceDirective(BaseClass, '_AddRef') + 'stdcall;' + sLineBreak +
-    '    function _Release: Integer; ' +
-      TExtractInterfaceEngine.IInterfaceDirective(BaseClass, '_Release') + 'stdcall;';
-  if (not HasAfterCtor) or (not HasNewInst) then
-    DeclBlock := DeclBlock + sLineBreak + '  public';
-  if not HasAfterCtor then
-    DeclBlock := DeclBlock + sLineBreak +
-      '    procedure AfterConstruction; override;';
-  if not HasNewInst then
-    DeclBlock := DeclBlock + sLineBreak +
-      '    class function NewInstance: TObject; override;';
+  // The block brings its own `private` section and no `override` -
+  // BuildIInterfaceDeclBlock says why, and a test pins both.
+  DeclBlock := TExtractInterfaceEngine.BuildIInterfaceDeclBlock(
+    HasNewInst, HasAfterCtor);
 
   Lines := ReadSourceLines(Src);
 
@@ -1779,7 +1979,6 @@ begin
     var Buf: TStringList := TStringList.Create;
     try
       for I := 0 to Info.ClassEndLine - 2 do Buf.Add(Lines[I]);
-      Buf.Add('  private');
       for var BL in DeclBlock.Split([sLineBreak]) do Buf.Add(BL);
       for I := Info.ClassEndLine - 1 to High(Lines) do Buf.Add(Lines[I]);
       Lines := StringListToArray(Buf);
@@ -1883,13 +2082,10 @@ begin
 
   if not APreview then WriteSourceLines(Src, Lines);
 
-  if BaseIsTObjectLike then
-    BaseDesc := 'TObject-like base (' +
-      IfThen(BaseClass = '', 'TObject', BaseClass) +
-      ') - fresh IInterface implementation'
-  else
-    BaseDesc := 'TComponent-style base (' + BaseClass +
-      ') - overrides the inherited virtual QueryInterface';
+  // No `override`: nothing in this chain declares an IInterface method,
+  // or the command would have refused above.
+  BaseDesc := IfThen(BaseClass = '', 'TObject', BaseClass) +
+    ' provides no IInterface - a fresh implementation was added';
 
   ExtraNote := '';
   if HasNewInst then

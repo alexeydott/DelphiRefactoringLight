@@ -105,3 +105,5 @@ Tests/Win64/
 /Standalone/Output/
 *.vrc
 *.$manifest
+# Build output of release.cmd (the .bpl files attached to a release)
+/Release/

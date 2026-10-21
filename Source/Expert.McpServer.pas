@@ -1571,6 +1571,323 @@ begin
   Result := OkResult(Res);
 end;
 
+// ---------------------------------------------------------------------------
+//  The PROJECT itself: open it, close it, add and remove files (user
+//  request 2026-10-20). All of it is IDE state, so the guards matter more
+//  than the calls: the IDE would ASK about unsaved work, and a question
+//  nobody can answer blocks the call instead of the user.
+// ---------------------------------------------------------------------------
+
+// The active project of the group, or the first plain project.
+function ActiveProject: IOTAProject;
+var
+  MS: IOTAModuleServices;
+  G: IOTAProjectGroup;
+begin
+  Result := nil;
+  if not Supports(BorlandIDEServices, IOTAModuleServices, MS) then Exit;
+  for var I := 0 to MS.ModuleCount - 1 do
+    if Supports(MS.Modules[I], IOTAProjectGroup, G) then
+    begin
+      Result := G.ActiveProject;
+      if Result <> nil then Exit;
+    end;
+  for var I := 0 to MS.ModuleCount - 1 do
+  begin
+    var P: IOTAProject;
+    if Supports(MS.Modules[I], IOTAProject, P) and
+       not Supports(P, IOTAProjectGroup) then
+      Exit(P);
+  end;
+end;
+
+// Every loaded module with unsaved changes - what the IDE would ask about.
+// A question is what we must not produce: McpRunOnMain refuses a write
+// while a modal dialog is up, and the IDE's own prompt would freeze the
+// call until somebody walks to the machine.
+function ModifiedModuleFiles: TArray<string>;
+var
+  MS: IOTAModuleServices;
+begin
+  Result := nil;
+  if not Supports(BorlandIDEServices, IOTAModuleServices, MS) then Exit;
+  for var I := 0 to MS.ModuleCount - 1 do
+  try
+    var M := MS.Modules[I];
+    if (M <> nil) and ModuleIsModified(M) then
+      Result := Result + [M.FileName];
+  except
+    // a module mid-construction is not worth the whole answer
+  end;
+end;
+
+function ProjectFilesJson(const P: IOTAProject): TJSONArray;
+begin
+  Result := TJSONArray.Create;
+  if P = nil then Exit;
+  for var I := 0 to P.GetModuleCount - 1 do
+  begin
+    var MI := P.GetModule(I);
+    if MI = nil then Continue;
+    var O := TJSONObject.Create;
+    O.AddPair('file', MI.FileName);
+    if MI.Name <> '' then O.AddPair('unit', MI.Name);
+    if MI.FormName <> '' then O.AddPair('form', MI.FormName);
+    Result.Add(O);
+  end;
+end;
+
+function ToolProjectOpen(AArgs: TJSONObject; AStop: THandle): string;
+var
+  F, Err, Msg: string;
+  Res: TJSONObject;
+  Opened: Boolean;
+begin
+  if not RequireFile(AArgs, F, Err) then Exit(ErrResult(Err));
+  var NewGroup := AArgs.GetValue<Boolean>('new_group', False);
+  var SaveFirst := AArgs.GetValue<Boolean>('save_modified', False);
+  Msg := '';
+  Opened := False;
+  Res := nil;
+  if not RunOnMain(
+    procedure
+    var
+      AS_: IOTAActionServices;
+    begin
+      if not FileExists(F) then
+      begin
+        Msg := 'file not found: ' + F;
+        Exit;
+      end;
+      // Opening a project closes what is open, and the IDE asks about
+      // unsaved work. Nobody can answer that here, so it is decided
+      // BEFORE: save it, or say no and let the caller decide.
+      var Dirty := ModifiedModuleFiles;
+      if Length(Dirty) > 0 then
+      begin
+        if not SaveFirst then
+        begin
+          Msg := Format('%d file(s) have unsaved changes, and opening a ' +
+            'project would make the IDE ask about them: %s. Pass ' +
+            'save_modified=true to save them first, or save / discard them ' +
+            'yourself.', [Length(Dirty), string.Join(', ', Dirty)]);
+          Exit;
+        end;
+        if Editor <> nil then Editor.SaveAllFiles;
+      end;
+      if not Supports(BorlandIDEServices, IOTAActionServices, AS_) then Exit;
+      Opened := AS_.OpenProject(F, NewGroup);
+      if not Opened then
+      begin
+        Msg := 'the IDE refused to open ' + F;
+        Exit;
+      end;
+      Res := TJSONObject.Create;
+      var P := ActiveProject;
+      if P <> nil then Res.AddPair('activeProject', P.FileName);
+      if P <> nil then
+        Res.AddPair('files', TJSONNumber.Create(P.GetModuleCount));
+    end, False, AStop, Err, 180000) then Exit(ErrResult(Err));
+  if not Opened then
+  begin
+    FreeAndNil(Res);
+    if Msg = '' then Msg := 'the IDE could not open ' + F;
+    Exit(ErrResult(Msg));
+  end;
+  if Res = nil then Res := TJSONObject.Create;
+  Res.AddPair('opened', F);
+  Res.AddPair('note', 'The identifier index and the DelphiLSP session ' +
+    'follow a project switch by themselves, but both need time: get_status ' +
+    'says when they are ready. A session that was already running keeps ' +
+    'answering for the OLD project until it is restarted - lsp_restart ' +
+    'does that.');
+  Result := OkResult(Res);
+end;
+
+function ToolProjectClose(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Err, Msg, Was: string;
+  Closed: Boolean;
+  Dirty: TArray<string>;
+begin
+  var SaveFirst := AArgs.GetValue<Boolean>('save_modified', False);
+  Msg := '';
+  Was := '';
+  Closed := False;
+  Dirty := nil;
+  if not RunOnMain(
+    procedure
+    var
+      MS: IOTAModuleServices;
+    begin
+      var P := ActiveProject;
+      if P = nil then
+      begin
+        Msg := 'no project is open';
+        Exit;
+      end;
+      Was := P.FileName;
+      Dirty := ModifiedModuleFiles;
+      if (Length(Dirty) > 0) and not SaveFirst then
+      begin
+        Msg := Format('%d file(s) have unsaved changes and closing would ' +
+          'make the IDE ask about them: %s. Pass save_modified=true to save ' +
+          'them first, or save / discard them yourself.',
+          [Length(Dirty), string.Join(', ', Dirty)]);
+        Exit;
+      end;
+      if (Length(Dirty) > 0) and (Editor <> nil) then Editor.SaveAllFiles;
+      if not Supports(BorlandIDEServices, IOTAModuleServices, MS) then Exit;
+      // CloseAll is what the IDE's own File > Close All does: the project
+      // group and every open file. There is no "close just the project".
+      Closed := MS.CloseAll;
+      if not Closed then Msg := 'the IDE refused to close the project';
+    end, False, AStop, Err, 180000) then Exit(ErrResult(Err));
+  if not Closed then
+  begin
+    if Msg = '' then Msg := 'the project could not be closed';
+    Exit(ErrResult(Msg));
+  end;
+  var Res := TJSONObject.Create;
+  Res.AddPair('closed', Was);
+  if Length(Dirty) > 0 then
+    Res.AddPair('saved', TJSONNumber.Create(Length(Dirty)));
+  Res.AddPair('note', 'The project group and every open file are closed ' +
+    '(the IDE has no "close only the project"). Our DelphiLSP session is ' +
+    'NOT ended by this - lsp_restart does that; without a project most ' +
+    'other tools have nothing to work on.');
+  Result := OkResult(Res);
+end;
+
+function ToolProjectFiles(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Err, Msg: string;
+  AddList, RemList: TArray<string>;
+  Rows: TJSONArray;
+  Report: TJSONArray;
+  Proj: string;
+  Changed, Saved: Boolean;
+
+  function Names(AArr: TJSONArray): TArray<string>;
+  begin
+    Result := nil;
+    if AArr = nil then Exit;
+    for var V in AArr do
+    begin
+      var S := Trim(V.Value);
+      if S <> '' then Result := Result + [ExpandFileName(S)];
+    end;
+  end;
+
+begin
+  AddList := Names(AArgs.GetValue<TJSONArray>('add', nil));
+  RemList := Names(AArgs.GetValue<TJSONArray>('remove', nil));
+  var DoApply := AArgs.GetValue<Boolean>('apply', False);
+  var DoSave := AArgs.GetValue<Boolean>('save', True);
+  Msg := '';
+  Rows := nil;
+  Report := nil;
+  Proj := '';
+  Changed := False;
+  Saved := False;
+  if not RunOnMain(
+    procedure
+    begin
+      var P := ActiveProject;
+      if P = nil then
+      begin
+        Msg := 'no project is open';
+        Exit;
+      end;
+      Proj := P.FileName;
+      Report := TJSONArray.Create;
+      for var F in AddList do
+      begin
+        var O := TJSONObject.Create;
+        O.AddPair('file', F);
+        O.AddPair('action', 'add');
+        if not FileExists(F) then
+          O.AddPair('result', 'NOT added: the file does not exist')
+        else if P.FindModuleInfo(F) <> nil then
+          O.AddPair('result', 'already in the project')
+        else if not DoApply then
+          O.AddPair('result', 'would be added')
+        else
+        begin
+          // IsUnitOrForm = what the project PROCESSES (a unit, a form, a
+          // resource script) as opposed to a raw file it only carries.
+          var Ext := LowerCase(ExtractFileExt(F));
+          P.AddFile(F, (Ext = '.pas') or (Ext = '.dfm') or (Ext = '.fmx') or
+            (Ext = '.inc') or (Ext = '.rc'));
+          Changed := True;
+          O.AddPair('result', 'added');
+        end;
+        Report.Add(O);
+      end;
+      for var F in RemList do
+      begin
+        var O := TJSONObject.Create;
+        O.AddPair('file', F);
+        O.AddPair('action', 'remove');
+        var MI := P.FindModuleInfo(F);
+        if MI = nil then
+          O.AddPair('result', 'NOT removed: the project does not list it')
+        else if not DoApply then
+          O.AddPair('result', 'would be removed')
+        else
+        begin
+          // The project's own spelling - a relative entry would not match.
+          P.RemoveFile(MI.FileName);
+          Changed := True;
+          O.AddPair('result', 'removed');
+        end;
+        Report.Add(O);
+      end;
+      if Changed and DoSave then
+      begin
+        P.Save(False, True);
+        Saved := True;
+      end;
+      Rows := ProjectFilesJson(P);
+    end, not DoApply, AStop, Err, 120000) then Exit(ErrResult(Err));
+  if Msg <> '' then
+  begin
+    FreeAndNil(Rows);
+    FreeAndNil(Report);
+    Exit(ErrResult(Msg));
+  end;
+
+  var Res := TJSONObject.Create;
+  Res.AddPair('project', Proj);
+  Res.AddPair('applied', TJSONBool.Create(DoApply));
+  if Rows <> nil then
+  begin
+    Res.AddPair('count', TJSONNumber.Create(Rows.Count));
+    Res.AddPair('files', Rows);
+  end;
+  if (Report <> nil) and (Report.Count > 0) then Res.AddPair('changes', Report)
+  else FreeAndNil(Report);
+  if (Length(AddList) = 0) and (Length(RemList) = 0) then
+    Res.AddPair('note', 'The files the project lists. Pass add / remove ' +
+      '(arrays of paths) plus apply=true to change it.')
+  else if not DoApply then
+    Res.AddPair('note', 'Nothing was changed - "changes" says what apply=' +
+      'true would do. The project FILE is not a buffer: a change to it is ' +
+      'not undoable with Ctrl+Z, which is why it takes apply.')
+  else if Saved then
+    Res.AddPair('note', 'The project file is written. Removing a file from ' +
+      'the project does not delete it from disk, and adding one does not ' +
+      'open it.')
+  else if Changed then
+    Res.AddPair('note', 'Changed in the IDE''s project model but NOT saved ' +
+      '(save=false): the .dproj on disk still says the old thing, and the ' +
+      'IDE will ask when the project closes.')
+  else
+    Res.AddPair('note', 'Nothing to do - see "changes" for the reason per ' +
+      'file.');
+  Result := OkResult(Res);
+end;
+
 // The status window's rows - what the plugin is doing and why something
 // does NOT work (index, LSP session, live checker and its sources, menus,
 // resources, blame, ...). Collected on the main thread like the window
@@ -1744,10 +2061,11 @@ end;
 // ---- per-tool statistics (tools window) ----------------------------------
 
 const
-  BuiltinTools: array[0..12] of string = ('get_diagnostics', 'get_quick_fixes',
+  BuiltinTools: array[0..15] of string = ('get_diagnostics', 'get_quick_fixes',
     'apply_quick_fix', 'apply_quick_fixes', 'buffer_open', 'buffer_read', 'buffer_edit',
     'buffer_list', 'buffer_close', 'buffer_save', 'get_status',
-    'scratch_analyze', 'scratch_close');
+    'scratch_analyze', 'scratch_close',
+    'project_open', 'project_close', 'project_files');
 
 function McpHandlesTool(const AName: string): Boolean;
 begin
@@ -2001,6 +2319,9 @@ begin
     else if Tool = 'get_status' then Result := ToolGetStatus(Args, AStop)
     else if Tool = 'scratch_analyze' then Result := ToolScratchAnalyze(Args, AStop)
     else if Tool = 'scratch_close' then Result := ToolScratchClose(Args, AStop)
+    else if Tool = 'project_open' then Result := ToolProjectOpen(Args, AStop)
+    else if Tool = 'project_close' then Result := ToolProjectClose(Args, AStop)
+    else if Tool = 'project_files' then Result := ToolProjectFiles(Args, AStop)
     else
     begin
       var Handler: TMcpToolHandler;

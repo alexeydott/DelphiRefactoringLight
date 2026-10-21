@@ -8,15 +8,17 @@
 unit Expert.MoveToUnitWizard;
 
 {
-  IOTAWizard / IOTAMenuWizard glue for the "Move to unit (project-wide)"
-  refactoring. Opens a unit picker, then hands the chosen target off to
-  Expert.MoveToUnit.TLspMoveToUnit.Execute.
+  IOTAWizard / IOTAMenuWizard glue for the "Move to unit" refactoring.
+  Opens the target dialog and hands its answer to the engine: an EXISTING
+  unit goes to TLspMoveToUnit.Execute, a NEW one to ExecuteToNewUnit.
+  The separate "Move to new unit..." menu entry is gone - the dialog
+  settles both (user request 2026-10-20).
 }
 
 interface
 
 uses
-  System.SysUtils, System.UITypes, System.StrUtils,
+  System.SysUtils, System.UITypes,
   Vcl.Forms, Vcl.Dialogs, {$IFNDEF STANDALONE_BUILD}ToolsAPI,{$ENDIF} 
   Expert.EditorHelperIntf, Expert.MoveToUnit, Expert.MoveToUnitDialog;
 
@@ -41,11 +43,6 @@ type
 
 var
   MoveToUnitInstance: TLspMoveToUnitWizard;
-
-/// <summary>Editor entry point "Move to new unit...": asks for the new
-///  unit's name (created next to the current unit; a path is accepted)
-///  and moves the identifier at the cursor there.</summary>
-procedure MoveToNewUnitAtCursor;
 
 implementation
 
@@ -77,7 +74,8 @@ begin Result := 'Move to unit...'; end;
 procedure TLspMoveToUnitWizard.Execute;
 var
   Ctx: TEditorContext;
-  Target: string;
+  Target, Err: string;
+  NewUnit: Boolean;
 begin
   Ctx := Editor.GetCurrentContext;
   if (Ctx.FileName = '') or
@@ -96,54 +94,25 @@ begin
 
   if not TMoveToUnitDialog.Choose(Application.MainForm,
        Ctx.WordAtCursor, Ctx.FileName,
-       Editor.GetProjectSourceFiles, Target) then
+       Editor.GetProjectSourceFiles, Target, NewUnit) then
     Exit;
 
   if Target = '' then Exit;
 
-  TLspMoveToUnit.Execute(Ctx.WordAtCursor, Ctx.FileName, Target, Ctx);
-end;
+  if not NewUnit then
+  begin
+    TLspMoveToUnit.Execute(Ctx.WordAtCursor, Ctx.FileName, Target, Ctx);
+    Exit;
+  end;
 
-procedure MoveToNewUnitAtCursor;
-var
-  Ctx: TEditorContext;
-  Name, Err: string;
-begin
-  Ctx := Editor.GetCurrentContext;
-  if (Ctx.FileName = '') or not SameText(ExtractFileExt(Ctx.FileName), '.pas') then
+  // The dialog ran this with APreview before it closed, so a refusal here
+  // is one that preview could not reach - and the menu path is where a
+  // message box belongs.
+  if TLspMoveToUnit.ExecuteToNewUnit(Ctx.WordAtCursor, Ctx.FileName, Target, Err) then
   begin
-    ShowThemedMessage('Please open a Delphi unit (.pas) first.');
-    Exit;
-  end;
-  if Ctx.WordAtCursor = '' then
-  begin
-    ShowThemedMessage('Place the cursor on the identifier to move first.');
-    Exit;
-  end;
-  // "TCustomerList" -> "CustomerList": the usual one-class-per-unit name
-  Name := Ctx.WordAtCursor;
-  if (Length(Name) > 1) and (Name[1] = 'T') and CharInSet(Name[2], ['A'..'Z']) then
-    Name := Copy(Name, 2, MaxInt);
-  var Dir := ExtractFilePath(Ctx.FileName);
-  if not AskThemedText('Move to new unit',
-    Format('Move %s into a NEW unit. Unit name (created in %s; a full path is ' +
-      'accepted, too):', [Ctx.WordAtCursor, Dir]), Name,
-    function(AValue: string): string
-    begin
-      var V := Trim(AValue);
-      if SameText(ExtractFileExt(V), '.pas') then V := ChangeFileExt(V, '');
-      Result := CheckNewUnitName(ExtractFileName(V));
-      if (Result = '') and FileExists(IfThen(ExtractFilePath(V) <> '', V, Dir + V) + '.pas') then
-        Result := 'that unit already exists';
-    end) then
-    Exit;
-  Name := Trim(Name);
-  if SameText(ExtractFileExt(Name), '.pas') then Name := ChangeFileExt(Name, '');
-  var NewFile := IfThen(ExtractFilePath(Name) <> '', Name, Dir + Name) + '.pas';
-  if TLspMoveToUnit.ExecuteToNewUnit(Ctx.WordAtCursor, Ctx.FileName, NewFile, Err) then
-  begin
+    // moved, but something is left to do (the project entry, typically)
     if Err <> '' then ShowThemedMessage(Err);
-    Editor.GotoLocation(NewFile, 0, 0);
+    Editor.GotoLocation(Target, 0, 0);
   end
   else
     ShowThemedMessage('Move to new unit: ' + Err);

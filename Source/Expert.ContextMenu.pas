@@ -158,7 +158,6 @@ type
     procedure OnResolveMissingUnits(Sender: TObject);
     procedure OnUsesCleanup(Sender: TObject);
     procedure OnMoveToUnit(Sender: TObject);
-    procedure OnMoveToNewUnit(Sender: TObject);
     procedure OnExtractInterface(Sender: TObject);
     procedure OnAddToExistingInterface(Sender: TObject);
     procedure OnDelegateInterface(Sender: TObject);
@@ -168,6 +167,7 @@ type
     procedure OnCheckDebugConsistency(Sender: TObject);
     procedure OnCheckLineEndings(Sender: TObject);
     procedure OnCheckFileEncoding(Sender: TObject);
+    procedure OnCheckUnusedUnits(Sender: TObject);
     procedure OnRetryTimer(Sender: TObject);
     procedure OnSyncTimer(Sender: TObject);
     procedure DoOnPopup(Sender: TObject);
@@ -232,7 +232,7 @@ uses
   Expert.SemanticReplaceWizard, Expert.DfmEventCheckDialog,
   Expert.InterfaceGuidDialog, Expert.CircularRefsDialog, Expert.StatusWindow,
   Expert.DebugConsistencyDialog, Expert.LineEndingDialog,
-  Expert.FileEncodingCheck,
+  Expert.FileEncodingCheck, Expert.UnusedUnitsDialog,
   Expert.BlameGutter, Expert.BlameDialogs, Expert.PluginSettings,
   Expert.FindUnitDialog, Expert.AutoImport, Expert.FindOriginalSymbolWizard,
   Expert.UsesCleanup, Expert.StatementRefactor, Expert.SafeDelete, Expert.IncludeExpander,
@@ -478,26 +478,27 @@ begin
   Root := TMenuItem.Create(AOwner);
   Root.Caption := 'Refactoring Light';
 
-  // ---- Refactor code at the cursor ----------------------------------------
-  Leaf(Root, 'Rename...',                 OnRename,               skRename,     REQ_EDITOR);
-  Leaf(Root, 'Extract Method',            OnExtractMethod,        skExtract,    REQ_EDITOR);
-  Leaf(Root, 'Extract variable...',       OnExtractVariable,      skExtractVariable, REQ_EDITOR);
+  // ---- At the cursor, part 1: introduce something NEW ---------------------
+  // The two blocks are alphabetical within themselves: with a dozen entries
+  // "where does it stand?" is the question that costs time, and the answer
+  // must not depend on when an entry was added.
+  Leaf(Root, 'Declare as constant...',    OnDeclareConstant,      skDeclareConstant, REQ_EDITOR);
+  // ONE entry for both targets: its dialog settles whether the symbol goes
+  // into an existing unit or into a new one (user request 2026-10-20).
+  Leaf(Root, 'Move to unit...',           OnMoveToUnit,           skMoveToUnit, REQ_EDITOR);
   Leaf(Root, 'Wrap in try..finally',      OnWrapTryFinally,       skWrapTryFinally,  REQ_EDITOR);
-  Leaf(Root, 'Declare as constant...',   OnDeclareConstant,      skDeclareConstant, REQ_EDITOR);
+
+  // ---- At the cursor, part 2: change what is already there ----------------
+  Sep(Root);
   Leaf(Root, 'Align method signature...', OnSignatureCheck,       skAlign,      REQ_EDITOR);
   Leaf(Root, 'Change signature...',       OnChangeSignature,      skChangeSignature, REQ_EDITOR);
-  Plain(Root, 'Edit methods...',           OnEditMethods,          REQ_EDITOR);
-  Leaf(Root, 'Move to unit...',           OnMoveToUnit,           skMoveToUnit, REQ_EDITOR);
-  Plain(Root, 'Move to new unit...',      OnMoveToNewUnit,        REQ_EDITOR);
-  Leaf(Root, 'Safe delete...',            OnSafeDelete,           skSafeDelete,      REQ_EDITOR);
   Leaf(Root, 'Convert properties (field / getter, setter)...', OnConvertProperties,
     skConvertProperties, REQ_EDITOR);
-
-  // one entry per multi-scope tool, the scope is picked in a dialog
-  // (Expert.ScopeChooser) - the local menu cannot nest, and the old
-  // submenus took twelve flat rows there
-  Leaf(Root, 'Remove with...',            OnRemoveWithChoose,     skRemoveWith, REQ_PROJECT);
-  Plain(Root, 'Expand include files...',  OnExpandIncludesChoose, REQ_ALWAYS);
+  Plain(Root, 'Edit methods...',          OnEditMethods,          REQ_EDITOR);
+  Leaf(Root, 'Extract Method',            OnExtractMethod,        skExtract,    REQ_EDITOR);
+  Leaf(Root, 'Extract variable...',       OnExtractVariable,      skExtractVariable, REQ_EDITOR);
+  Leaf(Root, 'Rename...',                 OnRename,               skRename,     REQ_EDITOR);
+  Leaf(Root, 'Safe delete...',            OnSafeDelete,           skSafeDelete,      REQ_EDITOR);
 
   IfaceSub := Sub(Root, 'Interfaces');
   Plain(IfaceSub, 'Extract new interface from class...', OnExtractInterface,       REQ_EDITOR);
@@ -520,7 +521,14 @@ begin
   Plain(Root, 'Uses cleanup (current unit)...', OnUsesCleanup,    REQ_EDITOR);
 
   // ---- Project-wide tools & checks ----------------------------------------
+  // The first three are the entries with a SCOPE DIALOG (Expert.ScopeChooser:
+  // cursor / unit / selected units / project) - one entry each, because the
+  // local menu cannot nest and the old submenus took twelve flat rows there.
+  // They stand beside the checks rather than inside them: a check REPORTS,
+  // these three WRITE.
   Sep(Root);
+  Plain(Root, 'Expand include files...',  OnExpandIncludesChoose, REQ_ALWAYS);
+  Leaf(Root, 'Remove with...',            OnRemoveWithChoose,     skRemoveWith, REQ_PROJECT);
   Plain(Root, 'Semantic replace...',      OnSemanticReplaceChoose, REQ_PROJECT);
 
   ChecksSub := Sub(Root, 'Project checks');
@@ -530,6 +538,7 @@ begin
   Plain(ChecksSub, 'Debug consistency...',         OnCheckDebugConsistency, REQ_PROJECT);
   Plain(ChecksSub, 'Line endings...',              OnCheckLineEndings,     REQ_PROJECT);
   Plain(ChecksSub, 'File encoding...',              OnCheckFileEncoding,    REQ_PROJECT);
+  Plain(ChecksSub, 'Unused project units...',       OnCheckUnusedUnits,     REQ_PROJECT);
 
   Sep(Root);
   Leaf(Root, 'Code Completion',           OnCompletion,           skCompletion, REQ_EDITOR);
@@ -1717,11 +1726,6 @@ begin
   CleanupUsesCurrentUnit;
 end;
 
-procedure TContextMenuInstaller.OnMoveToNewUnit(Sender: TObject);
-begin
-  MoveToNewUnitAtCursor;
-end;
-
 procedure TContextMenuInstaller.OnMoveToUnit(Sender: TObject);
 begin
   if MoveToUnitInstance <> nil then
@@ -1771,6 +1775,11 @@ end;
 procedure TContextMenuInstaller.OnCheckFileEncoding(Sender: TObject);
 begin
   Expert.FileEncodingCheck.CheckFileEncodings;
+end;
+
+procedure TContextMenuInstaller.OnCheckUnusedUnits(Sender: TObject);
+begin
+  Expert.UnusedUnitsDialog.CheckUnusedUnits;
 end;
 
 end.

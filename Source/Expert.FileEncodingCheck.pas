@@ -50,7 +50,7 @@ uses
   Vcl.Graphics, Vcl.Clipbrd, System.StrUtils,
   Expert.DebugConsistency, Expert.DialogHelper, Expert.EditorHelperIntf,
   Expert.IdeThemes, Expert.LineEndingWatcher, Expert.ListViewSort,
-  Expert.ScopeFiles;
+  Expert.ScopeFiles, Expert.UnitIndex;   // FindBdsRoot
 
 // ---------------------------------------------------------------------------
 //  the conversion - the one writer
@@ -184,6 +184,11 @@ type
     procedure DoFixClick(Sender: TObject);
     procedure DoGotoClick(Sender: TObject);
     procedure DoCopyClick(Sender: TObject);
+    /// <summary>Close, not ModalResult: this window is shown with Show,
+    ///  and nothing outside ShowModal's loop ever reads ModalResult
+    ///  (issue #47).</summary>
+    procedure DoCloseClick(Sender: TObject);
+    procedure DoFormClose(Sender: TObject; var Action: TCloseAction);
   public
     constructor CreateWith(const AIssues: TArray<TEncodingIssue>;
       ATarget: TSourceEncoding; AChecked: Integer);
@@ -210,6 +215,7 @@ var
 
 begin
   inherited CreateNew(nil);
+  OnClose := DoFormClose;
   FIssues := AIssues;
   FTarget := ATarget;
   Caption := 'File encoding';
@@ -255,7 +261,7 @@ begin
   Panel.BevelOuter := bvNone;
   FBtnFix := Btn('Convert c&hecked', 150, alLeft, DoFixClick);
   Btn('Copy &report', 110, alLeft, DoCopyClick);
-  Btn('&Close', 75, alRight, nil).ModalResult := mrCancel;
+  Btn('&Close', 75, alRight, DoCloseClick).Cancel := True;
   Btn('&Go to', 75, alRight, DoGotoClick);
 
   FillRows;
@@ -356,6 +362,18 @@ begin
     ShowThemedMessage('Not converted:' + sLineBreak + sLineBreak + Report);
 end;
 
+procedure TEncodingCheckDialog.DoCloseClick(Sender: TObject);
+begin
+  Close;
+end;
+
+procedure TEncodingCheckDialog.DoFormClose(Sender: TObject; var Action: TCloseAction);
+begin
+  // A result window of its own - every run opens a new one, so the closed
+  // one has to go rather than wait for the package to unload.
+  Action := caFree;
+end;
+
 procedure TEncodingCheckDialog.DoGotoClick(Sender: TObject);
 begin
   if (FList.Selected = nil) or (Editor = nil) then Exit;
@@ -434,11 +452,14 @@ begin
 
   Prog := CreateCheckProgress('File encoding...', nil);
   try
+    // FindBdsRoot: the scope takes every unit OPEN in the editor, and a
+    // Ctrl+click into an Indy or RTL source puts one there - measured on
+    // a live project, which offered to convert the shipped IdHTTP.pas.
     Issues := CollectEncodingIssues(Files, From, Target, ReadEncodingBytes,
       procedure(ACurrent, ATotal: Integer; const AFile: string)
       begin
         Prog.Step(ACurrent, ATotal, ExtractFileName(AFile));
-      end);
+      end, FindBdsRoot);
   finally
     Prog.Free;
   end;

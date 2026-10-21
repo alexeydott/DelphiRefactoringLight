@@ -44,7 +44,7 @@ const
   KindNames: array[TDebugIssueKind] of string = ('duplicate source',
     'stray DCU', 'DCU only', 'line endings', 'project option',
     'source directive', 'target', 'symbol file', 'host application',
-    'duplicate binary');
+    'duplicate binary', 'LSP reads a DCU');
   SeverityNames: array[TDebugIssueSeverity] of string = ('3 note', '2 warning',
     '1 problem');
 
@@ -167,6 +167,9 @@ begin
 
     Dir := FindBdsRoot;
     if Dir <> '' then AInput.IgnoreDirs := [ExcludeTrailingPathDelimiter(Dir)];
+    // What DelphiLSP reads: its own configuration names a DCU output, and
+    // a .dcu lying there is taken instead of the source (measured).
+    if Editor <> nil then AInput.LspConfigFile := Editor.FindDelphiLspJson;
     Result := True;
   except
     on E: Exception do

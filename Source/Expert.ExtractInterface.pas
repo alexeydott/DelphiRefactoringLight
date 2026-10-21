@@ -46,6 +46,60 @@ uses
 type
   TInterfaceMode = (eimExtractNew, eimAddToExisting);
 
+  /// <summary>What a class needs before it can implement an interface at
+  ///  all. Extracting one rewrites the class header to "TFoo = class(TBase,
+  ///  IFoo)", and that only compiles when the class provides IInterface's
+  ///  three methods - a TObject descendant does not (issue #46: the
+  ///  extracted interface looked right and the class stopped
+  ///  compiling).</summary>
+  TIInterfaceNeed = (
+    /// <summary>The class or one of its ancestors provides IInterface.</summary>
+    iinSatisfied,
+    /// <summary>A TObject-like base: deriving from TInterfacedObject (or
+    ///  TInterfacedPersistent) is the smallest fix.</summary>
+    iinChangeAncestor,
+    /// <summary>Another base, or a class that already implements PART of
+    ///  IInterface by hand: the methods belong in the class itself, which
+    ///  is what "Add IInterface support to class" writes.</summary>
+    iinAddSupport,
+    /// <summary>The base class could not be resolved - said so rather than
+    ///  guessed at.</summary>
+    iinUnknownBase);
+
+  /// <summary>What is known about a base class whose own text is not at
+  ///  hand. ibkOther means RESOLVED and nothing on its chain implements
+  ///  IInterface - changing the ancestor would drop that chain, so only
+  ///  adding the methods is left.</summary>
+  TIInterfaceBaseKind = (ibkUnknown, ibkImplements, ibkTObjectLike, ibkOther);
+
+  /// <summary>Resolves a base class NAME: does it, or one of its own
+  ///  ancestors, implement IInterface? Injected, because the answer needs
+  ///  the identifier index and the type graph while this unit stays pure.
+  ///  nil = only the RTL names this unit knows are decided.</summary>
+  TIInterfaceBaseResolver = reference to function(
+    const ABaseClass: string): TIInterfaceBaseKind;
+
+  TIInterfaceVerdict = record
+    Need: TIInterfaceNeed;
+    /// <summary>The first entry of the ancestor list; '' for an implicit
+    ///  TObject ("TFoo = class").</summary>
+    BaseClass: string;
+    /// <summary>For iinChangeAncestor: what to derive from instead.</summary>
+    SuggestedAncestor: string;
+    /// <summary>Of QueryInterface / _AddRef / _Release: what the class does
+    ///  not declare itself.</summary>
+    Missing: TArray<string>;
+    /// <summary>The ancestor list already names IInterface / IUnknown. With
+    ///  a Need other than iinSatisfied that means the class does not
+    ///  compile as it stands.</summary>
+    ListsInterface: Boolean;
+    /// <summary>One sentence: what is the case. Shown as it is.</summary>
+    Reason: string;
+    /// <summary>One sentence: what can be done about it.</summary>
+    Offer: string;
+    function Ok: Boolean;
+  end;
+
   TMemberKind = (mkField, mkProperty, mkMethod);
 
   TMemberVisibility = (mvUnknown, mvStrictPrivate, mvPrivate, mvStrictProtected,
@@ -144,6 +198,21 @@ type
     ///  interface members (TButton, TListView, ...) resolves out of the
     ///  box. eimAddToExisting ignores this.</summary>
     NewUnitUses: TArray<string>;
+    /// <summary>Filled by the wizard (ParseClassAtLine cannot - the rule
+    ///  needs a base-class resolver): what the class needs before it can
+    ///  carry an interface at all.</summary>
+    IInterface: TIInterfaceVerdict;
+    /// <summary>A base class to derive from instead, applied with the
+    ///  extraction and BEFORE the interface joins the ancestor list (which
+    ///  would otherwise become the first entry this replaces). '' = leave
+    ///  the ancestor alone.</summary>
+    ChangeBaseTo: string;
+    /// <summary>Run "Add IInterface support to class" with the extraction:
+    ///  QueryInterface / _AddRef / _Release and the reference counting go
+    ///  into the class ITSELF. The other half of the same offer, for a
+    ///  class whose ancestor has to stay (user, 2026-10-17: "Wir koennen
+    ///  das doch direkt selbst machen").</summary>
+    AddIInterface: Boolean;
   end;
 
   TExtractInterfaceEngine = class
@@ -264,7 +333,51 @@ type
     ///  with base ABaseClass: 'override; ' where the base declares it
     ///  virtual, else ''. Only QueryInterface is virtual in TComponent;
     ///  its _AddRef and _Release are static (E2170 on override).</summary>
-    class function IInterfaceDirective(const ABaseClass, AMethodName: string): string;
+    /// <summary>The declarations "Add IInterface support to class"
+    ///  inserts into the class body, as ONE block. Two rules the compiler
+    ///  enforces, and both cost a live round (user, 2026-10-17, a class
+    ///  derived from TRecall):
+    ///  * it opens its OWN `private` section. The block is spliced at the
+    ///    END of an existing private section, and there a FIELD may not
+    ///    follow methods (E2169).
+    ///  * NO `override` on QueryInterface / _AddRef / _Release. This block
+    ///    is only ever generated when ALL THREE are missing from the whole
+    ///    ancestor chain: a base that declares them makes the verdict
+    ///    "satisfied" and the command refuse, one that declares some is
+    ///    refused as "partly by hand". So there is no inherited virtual
+    ///    method to override here - and `override` without one is E2137,
+    ///    which is exactly what the name-based guess produced for every
+    ///    base that was not literally TObject or TPersistent.
+    ///  AHASNEWINSTANCE / AHASAFTERCONSTRUCTION: the class declares it
+    ///  already, so it is not declared again (E2007) - the caller splices
+    ///  the refcount statement into the existing body.</summary>
+    class function BuildIInterfaceDeclBlock(
+      AHasNewInstance, AHasAfterConstruction: Boolean): string;
+
+    /// <summary>What this unit knows about an RTL base class, measured in
+    ///  the shipped sources rather than assumed. ibkUnknown for everything
+    ///  else - that is what the resolver is for.</summary>
+    class function KnownIInterfaceBaseKind(
+      const ABaseClass: string): TIInterfaceBaseKind;
+
+    /// <summary>Whether the class declared at AClassDeclLine can implement
+    ///  an interface, and what to do when it cannot. The class's own three
+    ///  methods decide first (a hand-written delegation needs no special
+    ///  base at all), then the base class - known names before AResolver,
+    ///  because the known answer is exact and free.</summary>
+    class function IInterfaceNeedOf(const AFileLines: TArray<string>;
+      AClassDeclLine, AClassEndLine: Integer; const AClassName: string;
+      const AResolver: TIInterfaceBaseResolver = nil): TIInterfaceVerdict;
+
+    /// <summary>The class header with ANewBase as its base class: an empty
+    ///  list is created after the class modifiers ("class abstract(TBase)"
+    ///  is where Delphi puts it), an existing one has its FIRST entry
+    ///  replaced and keeps every interface behind it. Refuses a forward
+    ///  declaration, a "class of", a list that is not closed on this line
+    ///  and a header that already names ANewBase - a refusal says why, and
+    ///  nothing is rewritten on a guess.</summary>
+    class function PlanBaseClassChange(const AHeaderLine, ANewBase: string;
+      out ANewLine, AWhy: string): Boolean;
   end;
 
   /// <summary>Tiny utility: scans an entire Pascal source file and yields
@@ -292,6 +405,20 @@ type
     class function ScanProject(const AFiles: TArray<string>): TArray<TInterfaceDeclLocation>;
   end;
 
+/// <summary>ATARGETLINES with AINTERFACETEXT added to the END of its
+///  interface section's type block - a new "type" section is opened before
+///  the first declaration when there is none. The unit keeps everything it
+///  already has (user, 2026-10-17: "Wenn die Zielunit schon existiert,
+///  sollte das Interface dort hinzugefuegt werden" - the version before
+///  asked whether to OVERWRITE the whole file).
+///  REFUSED when the unit already declares AINTERFACENAME: splicing a
+///  second declaration of the same name is never what was meant, and
+///  extending the one that is there is what "Add to existing interface"
+///  does. False + AWHY, so the caller can say which it is.</summary>
+function PlanInterfaceIntoUnit(const ATargetLines: TArray<string>;
+  const AInterfaceName, AInterfaceText: string;
+  out ANewLines: TArray<string>; out AWhy: string): Boolean;
+
 /// <summary>The name of a synthesised accessor for the member exposed as
 ///  AExposedName: APrefix ('Get' / 'Set') plus the name WITHOUT its '&'
 ///  escape. The property itself KEEPS the escape - the bare word is the
@@ -302,14 +429,200 @@ type
 ///  bodies in the wizard (issue #44).</summary>
 function AccessorName(const APrefix, AExposedName: string): string;
 
+/// <summary>The declared type of a property signature: what stands after
+///  the ':' at bracket depth ZERO. An ARRAY property carries its own
+///  colon inside the index specification ("property Test[ AIndex:
+///  Integer]: Integer read GetTest"), and reading the FIRST colon gave
+///  the type "Integer]:" (issue #46). '' when there is no such colon.</summary>
+function PropertyTypeName(const ASignature: string): string;
+
+/// <summary>The index specification of a property INCLUDING its brackets
+///  ("[ AIndex: Integer]"), or '' for a plain property. Its presence is
+///  what makes a property an array property, and such a property can only
+///  ever be served by accessor METHODS - never by a field.</summary>
+function PropertyIndexSpec(const ASignature: string): string;
+
+/// <summary>The identifiers a property signature names after 'read' and
+///  after 'write' ('' when the clause is absent). The words are read with
+///  the keyword SKIPPED - stepping one character short of it answered 'D'
+///  for every property, which made each of them look like a field
+///  accessor (issue #46).</summary>
+procedure PropertyAccessors(const ASignature: string; out ARead, AWrite: string);
+
 implementation
 
 uses
-  System.StrUtils, System.Character, System.Math, Winapi.ActiveX, Winapi.Windows, Expert.PascalScanner;
+  System.StrUtils, System.Character, System.Math, Winapi.ActiveX, Winapi.Windows,
+  Expert.PascalScanner, Expert.AutoImport;   // UnitSectionEnd / SplitContentLines
 
 function AccessorName(const APrefix, AExposedName: string): string;
 begin
   Result := APrefix + UnescapedIdentifier(AExposedName);
+end;
+
+// Does ALINE declare a type of that name - "IFoo = interface", "IFoo =
+// class", "IFoo = interface;"? The name must be the whole first token.
+function DeclaresTypeNamed(const ALine, AName: string): Boolean;
+var
+  T: string;
+  P: Integer;
+begin
+  Result := False;
+  T := Trim(ALine);
+  if not StartsText(AName, T) then Exit;
+  P := Length(AName) + 1;
+  if (P <= Length(T)) and IsIdentChar(T[P]) then Exit;
+  T := Trim(Copy(T, P, MaxInt));
+  Result := StartsStr('=', T);
+end;
+
+function PlanInterfaceIntoUnit(const ATargetLines: TArray<string>;
+  const AInterfaceName, AInterfaceText: string;
+  out ANewLines: TArray<string>; out AWhy: string): Boolean;
+var
+  Masked: TArray<string>;
+  IntfLine, ImplLine, I, InsertAt: Integer;
+  Upper: string;
+  NewBlock: TArray<string>;
+begin
+  Result := False;
+  ANewLines := ATargetLines;
+  AWhy := '';
+  if (Length(ATargetLines) = 0) or (Trim(AInterfaceText) = '') then
+  begin
+    AWhy := 'the target unit could not be read';
+    Exit;
+  end;
+
+  // Comments and strings blanked: a type of that name inside a comment is
+  // not a declaration, and neither is one in the implementation section.
+  Masked := MaskCommentsAndStrings(ATargetLines);
+  IntfLine := -1;
+  ImplLine := Length(Masked);
+  for I := 0 to High(Masked) do
+  begin
+    Upper := UpperCase(Trim(Masked[I]));
+    if (IntfLine < 0) and (Upper = 'INTERFACE') then IntfLine := I
+    else if Upper = 'IMPLEMENTATION' then
+    begin
+      ImplLine := I;
+      Break;
+    end;
+  end;
+  if IntfLine < 0 then
+  begin
+    AWhy := 'the target unit has no interface section';
+    Exit;
+  end;
+
+  for I := IntfLine to ImplLine - 1 do
+    if DeclaresTypeNamed(Masked[I], AInterfaceName) then
+    begin
+      AWhy := Format('the target unit already declares %s (line %d) - use ' +
+        '"Add to existing interface" to extend that one',
+        [AInterfaceName, I + 1]);
+      Exit;
+    end;
+
+  // The END of the interface section's type block, or - when it has none -
+  // before its first declaration.
+  InsertAt := UnitSectionEnd(ATargetLines, 'type', IntfLine, ImplLine - 1);
+  if InsertAt >= 0 then
+  begin
+    NewBlock := [''] + SplitContentLines(AInterfaceText);
+    Inc(InsertAt);
+  end
+  else
+  begin
+    InsertAt := UnitSectionAnchor(ATargetLines, IntfLine + 1, ImplLine - 1);
+    NewBlock := [''] + ['type'] + SplitContentLines(AInterfaceText);
+  end;
+  if InsertAt > ImplLine then InsertAt := ImplLine;
+
+  ANewLines := Copy(ATargetLines, 0, InsertAt) + NewBlock +
+    Copy(ATargetLines, InsertAt, Length(ATargetLines) - InsertAt);
+  Result := True;
+end;
+
+function PropertyTypeName(const ASignature: string): string;
+var
+  I, Depth: Integer;
+begin
+  Result := '';
+  Depth := 0;
+  for I := 1 to Length(ASignature) do
+  begin
+    case ASignature[I] of
+      '[', '(': Inc(Depth);
+      ']', ')': if Depth > 0 then Dec(Depth);
+      ':':
+        if Depth = 0 then
+        begin
+          var T := Trim(Copy(ASignature, I + 1, MaxInt));
+          var K := 1;
+          while (K <= Length(T)) and not T[K].IsWhiteSpace and (T[K] <> ';') do
+            Inc(K);
+          Exit(Copy(T, 1, K - 1));
+        end;
+    end;
+  end;
+end;
+
+function PropertyIndexSpec(const ASignature: string): string;
+var
+  I, Depth, Start: Integer;
+begin
+  Result := '';
+  Depth := 0;
+  Start := 0;
+  for I := 1 to Length(ASignature) do
+  begin
+    if ASignature[I] = '[' then
+    begin
+      if Depth = 0 then Start := I;
+      Inc(Depth);
+    end
+    else if ASignature[I] = ']' then
+    begin
+      if Depth > 0 then Dec(Depth);
+      if (Depth = 0) and (Start > 0) then
+        Exit(Copy(ASignature, Start, I - Start + 1));
+    end
+    // A ':' at depth 0 ends the name part: anything in brackets after it
+    // belongs to the TYPE ("property P: array[0..1] of Byte read ..."),
+    // not to an index specification.
+    else if (ASignature[I] = ':') and (Depth = 0) then
+      Exit('');
+  end;
+end;
+
+procedure PropertyAccessors(const ASignature: string; out ARead, AWrite: string);
+
+  function WordAfter(const AKeyword: string): string;
+  var
+    Padded: string;
+    P, Idx, Start: Integer;
+  begin
+    Result := '';
+    Padded := ' ' + ASignature + ' ';
+    P := Pos(' ' + AKeyword + ' ', UpperCase(Padded));
+    if P = 0 then Exit;
+    // P points at the SPACE before the keyword, so the keyword itself ends
+    // at P + Length(AKeyword) - stepping only Length(AKeyword) lands on its
+    // last character and answered 'D' for 'READ' (issue #46).
+    Idx := P + Length(AKeyword) + 1;
+    while (Idx <= Length(Padded)) and (Padded[Idx] = ' ') do Inc(Idx);
+    Start := Idx;
+    while (Idx <= Length(Padded)) and
+          (IsIdentChar(Padded[Idx]) or (Padded[Idx] = '.') or
+           (Padded[Idx] = '&')) do
+      Inc(Idx);
+    Result := Copy(Padded, Start, Idx - Start);
+  end;
+
+begin
+  ARead := WordAfter('READ');
+  AWrite := WordAfter('WRITE');
 end;
 
 { ---------- helpers ---------- }
@@ -696,47 +1009,17 @@ begin
         end;
         var SigEnd := I + 1;
         Inc(I);
-        // Detect default-array / index suffixes? For v1 we just keep them.
         var TrimAcc := Trim(Acc);
         // name after "property "
         var Pn := ExtractIdentAfter(TrimAcc, Length('property') + 1, J);
-        // type after first ':'
-        var ColonP := Pos(':', TrimAcc);
-        var TName := '';
-        if ColonP > 0 then
-        begin
-          var T := Trim(Copy(TrimAcc, ColonP + 1, MaxInt));
-          // up to next space or ';' or 'read' keyword
-          var K := 1;
-          while (K <= Length(T)) and not T[K].IsWhiteSpace and (T[K] <> ';') do Inc(K);
-          TName := Copy(T, 1, K - 1);
-        end;
-        var UpAcc := UpperCase(TrimAcc);
-        var HasWrite := (Pos(' WRITE ', ' ' + UpAcc + ' ') > 0);
-        var HasRead  := (Pos(' READ ', ' ' + UpAcc + ' ') > 0);
-
-        // Detect "naked" accessors that name a field (no method call):
-        // word after READ / WRITE that does NOT start with Get/Set we
-        // treat as field-style (conservative - rather emit a redundant
-        // accessor than miss one).
-        var AccReadIsField := False;
-        var AccWriteIsField := False;
-        for var KW in ['READ', 'WRITE'] do
-        begin
-          var KU: string := ' ' + UpAcc + ' ';
-          var KP: Integer := Pos(' ' + KW + ' ', KU);
-          if KP = 0 then Continue;
-          // Step past the keyword in UpAcc itself (KP is 1-based into KU).
-          var Idx: Integer := KP + Length(KW);
-          while (Idx <= Length(KU)) and (KU[Idx] = ' ') do Inc(Idx);
-          var Start: Integer := Idx;
-          while (Idx <= Length(KU)) and (IsIdentChar(KU[Idx]) or (KU[Idx] = '.')) do Inc(Idx);
-          var W: string := Copy(KU, Start, Idx - Start);
-          var Field: Boolean := (W <> '') and
-            not StartsText('GET', W) and not StartsText('SET', W);
-          if KW = 'READ' then AccReadIsField := Field
-          else AccWriteIsField := Field;
-        end;
+        // The type stands after the ':' at bracket depth 0 - an array
+        // property carries its own colon inside the index specification
+        // (issue #46).
+        var TName := PropertyTypeName(TrimAcc);
+        var AccRead, AccWrite: string;
+        PropertyAccessors(TrimAcc, AccRead, AccWrite);
+        var HasRead := AccRead <> '';
+        var HasWrite := AccWrite <> '';
 
         var M: TClassMember;
         M := Default(TClassMember);
@@ -752,8 +1035,13 @@ begin
         M.LineEnd := SigEnd;
         M.ExposedName := Pn;
         M.IsReadOnly := HasRead and not HasWrite;
-        M.NeedsSynthAccessors :=
-          (HasRead and AccReadIsField) or (HasWrite and AccWriteIsField);
+        M.GetterName := AccRead;
+        M.SetterName := AccWrite;
+        // Whether these accessors are METHODS of this class or plain
+        // FIELDS can only be decided once every member is known - an
+        // accessor may be declared below the property. See the pass after
+        // the loop.
+        M.NeedsSynthAccessors := False;
         Members.Add(M);
         ResetModifiers;
         Continue;
@@ -805,6 +1093,45 @@ begin
       Inc(I);
     end;
 
+    // An accessor is a METHOD of this class or it is not - and that
+    // decides everything downstream: a method accessor means the property
+    // goes into the interface AS IT STANDS (with its index list) and the
+    // accessor's own signature comes along, while a field accessor means
+    // the engine has to invent the pair. The old test was "the word does
+    // not start with Get/Set", which is a guess, and it ran on a word that
+    // was always 'D' (issue #46). The class's own member list is exact,
+    // and it is complete only here - an accessor may stand BELOW its
+    // property.
+    for var PI := 0 to Members.Count - 1 do
+    begin
+      if Members[PI].Kind <> mkProperty then Continue;
+      var PM := Members[PI];
+      // An ARRAY property can never be served by a field, so it is always
+      // emitted verbatim - inventing accessors there would drop the index
+      // list, which is exactly the reported damage.
+      if PropertyIndexSpec(PM.Signature) <> '' then
+        PM.NeedsSynthAccessors := False
+      else
+      begin
+        var NeedSynth := False;
+        for var AccName in [PM.GetterName, PM.SetterName] do
+        begin
+          if AccName = '' then Continue;
+          var IsOwnMethod := False;
+          for var MI := 0 to Members.Count - 1 do
+            if (Members[MI].Kind = mkMethod) and
+               SameText(Members[MI].Name, AccName) then
+            begin
+              IsOwnMethod := True;
+              Break;
+            end;
+          if not IsOwnMethod then NeedSynth := True;
+        end;
+        PM.NeedsSynthAccessors := NeedSynth;
+      end;
+      Members[PI] := PM;
+    end;
+
     AInfo.Members := Members.ToArray;
   finally
     Members.Free;
@@ -820,11 +1147,13 @@ class function TExtractInterfaceEngine.BuildInterfaceText(
   const AInfo: TExtractInterfaceInfo): string;
 var
   SB: TStringBuilder;
+  Emitted: TStringList;
   M: TClassMember;
   Pn, Getter, Setter, TN, Indent: string;
 begin
   Indent := '    ';
   SB := TStringBuilder.Create;
+  Emitted := TStringList.Create;
   try
     SB.Append('  ').Append(AInfo.InterfaceName).Append(' = interface').AppendLine;
     SB.Append(Indent).Append('[''').Append(AInfo.Guid).Append(''']').AppendLine;
@@ -839,7 +1168,10 @@ begin
       if M.IsClassMember then Continue;
       case M.Kind of
         mkMethod:
+        begin
           SB.Append(Indent).Append(M.Signature).Append(';').AppendLine;
+          Emitted.Add(M.Signature);
+        end;
 
         mkField:
         begin
@@ -860,7 +1192,26 @@ begin
         mkProperty:
         begin
           if not M.NeedsSynthAccessors then
-            SB.Append(Indent).Append(M.Signature).Append(';').AppendLine
+          begin
+            // An interface property may only name accessors the INTERFACE
+            // itself declares, so the methods it reads and writes come
+            // along - with their own signatures, which is what carries an
+            // array property's index parameters (issue #46). A method the
+            // user ticked as well is not emitted twice.
+            for var AccName in [M.GetterName, M.SetterName] do
+            begin
+              if AccName = '' then Continue;
+              for var A in AInfo.Members do
+                if (A.Kind = mkMethod) and not A.IsClassMember and
+                   SameText(A.Name, AccName) and
+                   (Emitted.IndexOf(A.Signature) < 0) then
+                begin
+                  SB.Append(Indent).Append(A.Signature).Append(';').AppendLine;
+                  Emitted.Add(A.Signature);
+                end;
+            end;
+            SB.Append(Indent).Append(M.Signature).Append(';').AppendLine;
+          end
           else
           begin
             Pn := M.ExposedName;
@@ -889,6 +1240,7 @@ begin
     SB.Append('  end;');
     Result := SB.ToString;
   finally
+    Emitted.Free;
     SB.Free;
   end;
 end;
@@ -905,9 +1257,13 @@ begin
   try
     SB.Append('unit ').Append(UName).Append(';').AppendLine.AppendLine;
     SB.Append('interface').AppendLine.AppendLine;
-    SB.Append('uses').AppendLine;
+    // An interface that names nothing but built-in types needs NO uses
+    // clause, and inventing one is the opposite of what an interface unit
+    // is for (user, 2026-10-17). The old else-branch guessed
+    // System.Classes + System.SysUtils.
     if Length(AInfo.NewUnitUses) > 0 then
     begin
+      SB.Append('uses').AppendLine;
       // Emit comma-separated on one or more wrapped lines (Delphi
       // convention) instead of one-unit-per-line. Wrap when the
       // current line would exceed ~75 chars including the trailing
@@ -929,10 +1285,8 @@ begin
       end;
       if Length(Line) > 2 then
         SB.Append(TrimRight(Line)).AppendLine;
-    end
-    else
-      SB.Append('  System.Classes, System.SysUtils;').AppendLine;
-    SB.AppendLine;
+      SB.AppendLine;
+    end;
     SB.Append('type').AppendLine;
     SB.Append(BuildInterfaceText(AInfo)).AppendLine.AppendLine;
     SB.Append('implementation').AppendLine.AppendLine;
@@ -1036,6 +1390,13 @@ begin
         begin
           L.Add(AccessorName('Get', M.ExposedName));
           if not M.IsReadOnly then L.Add(AccessorName('Set', M.ExposedName));
+        end
+        else
+        begin
+          // The accessor METHODS travel with the property, so their names
+          // are part of what this member puts into the interface.
+          if M.GetterName <> '' then L.Add(M.GetterName);
+          if M.SetterName <> '' then L.Add(M.SetterName);
         end;
       end;
     end;
@@ -1307,16 +1668,279 @@ begin
   Result := True;
 end;
 
-class function TExtractInterfaceEngine.IInterfaceDirective(
-  const ABaseClass, AMethodName: string): string;
+{ TIInterfaceVerdict }
+
+function TIInterfaceVerdict.Ok: Boolean;
 begin
-  Result := '';
-  if (ABaseClass = '') or SameText(ABaseClass, 'TObject') or
-     SameText(ABaseClass, 'TPersistent') then Exit;
-  // TComponent-style base: QueryInterface is virtual, _AddRef/_Release
-  // are not
-  if SameText(AMethodName, 'QueryInterface') then
-    Result := 'override; ';
+  Result := Need = iinSatisfied;
+end;
+
+class function TExtractInterfaceEngine.KnownIInterfaceBaseKind(
+  const ABaseClass: string): TIInterfaceBaseKind;
+const
+  // MEASURED in the shipped RTL sources, not assumed: System.pas declares
+  // TInterfacedObject, TContainedObject, TClassHelperBase and
+  // TNoRefCountObject with IInterface in their ancestor list,
+  // System.Classes TInterfacedPersistent and TComponent; TAggregatedObject
+  // is "class(TObject)" and declares the three methods itself (so the
+  // ancestor list alone would have answered wrongly there), and
+  // TSingletonImplementation gets them from TNoRefCountObject.
+  Implementers: array[0..9] of string = ('TInterfacedObject',
+    'TAggregatedObject', 'TContainedObject', 'TClassHelperBase',
+    'TNoRefCountObject', 'TSingletonImplementation', 'TInterfacedPersistent',
+    'TComponent', 'TInterfaceList', 'TStreamAdapter');
+  // SHORTCUTS, not independent facts: every one of these descends from
+  // TComponent (measured - Vcl.Controls "TControl = class(TComponent)",
+  // FMX.Types "TFmxObject = class(TComponent)"), so the chain walk would
+  // reach the same answer. It would do so by parsing Vcl.Forms and
+  // Vcl.Controls on the main thread, and it would answer "could not be
+  // determined" while the identifier index is still cold - which is
+  // exactly the moment someone opens a form and runs this.
+  Roots: array[0..10] of string = ('TControl', 'TWinControl',
+    'TCustomControl', 'TGraphicControl', 'TScrollingWinControl',
+    'TCustomForm', 'TForm', 'TFrame', 'TCustomFrame', 'TDataModule',
+    'TFmxObject');
+begin
+  // An implicit base IS TObject ("TFoo = class").
+  if Trim(ABaseClass) = '' then Exit(ibkTObjectLike);
+  if SameText(ABaseClass, 'TObject') or SameText(ABaseClass, 'TPersistent') then
+    Exit(ibkTObjectLike);
+  for var N in Implementers do
+    if SameText(ABaseClass, N) then Exit(ibkImplements);
+  for var N in Roots do
+    if SameText(ABaseClass, N) then Exit(ibkImplements);
+  Result := ibkUnknown;
+end;
+
+class function TExtractInterfaceEngine.IInterfaceNeedOf(
+  const AFileLines: TArray<string>;
+  AClassDeclLine, AClassEndLine: Integer; const AClassName: string;
+  const AResolver: TIInterfaceBaseResolver): TIInterfaceVerdict;
+const
+  Methods: array[0..2] of string = ('QueryInterface', '_AddRef', '_Release');
+var
+  Have: TArray<string>;
+  Kind: TIInterfaceBaseKind;
+  BaseName: string;
+begin
+  Result := Default(TIInterfaceVerdict);
+  Result.Need := iinSatisfied;
+  if (AClassDeclLine < 1) or (AClassDeclLine > Length(AFileLines)) then
+  begin
+    Result.Need := iinUnknownBase;
+    Result.Reason := 'the class declaration is outside the file';
+    Exit;
+  end;
+
+  for var A in ParseClassAncestors(AFileLines[AClassDeclLine - 1],
+    Result.BaseClass) do
+    if SameText(A, 'IInterface') or SameText(A, 'IUnknown') then
+      Result.ListsInterface := True;
+  if Result.BaseClass = '' then BaseName := 'TObject' else BaseName := Result.BaseClass;
+
+  for var M in Methods do
+    if ClassHasMethodDecl(AFileLines, AClassDeclLine, AClassEndLine, M) then
+      Have := Have + [M]
+    else
+      Result.Missing := Result.Missing + [M];
+
+  if Length(Result.Missing) = 0 then
+  begin
+    Result.Reason := Format(
+      '%s declares QueryInterface, _AddRef and _Release itself', [AClassName]);
+    Exit;
+  end;
+
+  // Known names first: the answer is exact and costs nothing, and it keeps
+  // a resolver from having to be right about the RTL.
+  Kind := KnownIInterfaceBaseKind(Result.BaseClass);
+  if (Kind = ibkUnknown) and Assigned(AResolver) then
+    Kind := AResolver(Result.BaseClass);
+
+  if Kind = ibkImplements then
+  begin
+    Result.Reason := Format('%s descends from %s, which implements IInterface',
+      [AClassName, BaseName]);
+    Exit;
+  end;
+
+  // PART of IInterface by hand is a deliberate implementation (a
+  // delegation, a no-refcount object): swapping its ancestor would collide
+  // with what is already there, so the only honest offer is to complete it.
+  if Length(Have) > 0 then
+  begin
+    Result.Need := iinAddSupport;
+    Result.Reason := Format('%s declares %s, but not %s',
+      [AClassName, string.Join(', ', Have), string.Join(', ', Result.Missing)]);
+    Result.Offer := 'complete the missing method(s) by hand - "Add IInterface ' +
+      'support to class" would redeclare what is already there';
+  end
+  else
+    case Kind of
+      ibkTObjectLike:
+        begin
+          Result.Need := iinChangeAncestor;
+          if SameText(Result.BaseClass, 'TPersistent') then
+            Result.SuggestedAncestor := 'TInterfacedPersistent'
+          else
+            Result.SuggestedAncestor := 'TInterfacedObject';
+          Result.Reason := Format('%s descends from %s, which does not ' +
+            'implement IInterface - QueryInterface, _AddRef and _Release are ' +
+            'missing', [AClassName, BaseName]);
+          Result.Offer := Format('derive it from %s, or add IInterface ' +
+            'support to the class itself', [Result.SuggestedAncestor]);
+        end;
+      ibkOther:
+        begin
+          Result.Need := iinAddSupport;
+          Result.Reason := Format('%s descends from %s, and nothing on that ' +
+            'chain implements IInterface', [AClassName, BaseName]);
+          Result.Offer := Format('add IInterface support to the class - ' +
+            'deriving from TInterfacedObject instead would drop %s', [BaseName]);
+        end;
+    else
+      Result.Need := iinUnknownBase;
+      Result.Reason := Format('%s descends from %s, and whether that ' +
+        'implements IInterface could not be determined here',
+        [AClassName, BaseName]);
+      Result.Offer := 'if the compiler reports the three IInterface methods ' +
+        'as missing, add IInterface support to the class';
+    end;
+
+  if not Result.Ok then
+    if Result.ListsInterface then
+      Result.Reason := Result.Reason +
+        ' (its ancestor list already names IInterface, so it does not compile ' +
+        'as it stands)';
+end;
+
+class function TExtractInterfaceEngine.PlanBaseClassChange(
+  const AHeaderLine, ANewBase: string; out ANewLine, AWhy: string): Boolean;
+var
+  Code, Rest: string;
+  KP, P, Q, Start, Stop: Integer;
+begin
+  Result := False;
+  ANewLine := '';
+  AWhy := '';
+  if Trim(ANewBase) = '' then
+  begin
+    AWhy := 'no base class given';
+    Exit;
+  end;
+  Code := StripLineComment(AHeaderLine);
+  KP := TypeKeywordPos(Code, ['class']);
+  if KP = 0 then
+  begin
+    AWhy := 'the line does not declare a class';
+    Exit;
+  end;
+  Rest := Trim(Copy(Code, KP + Length('class'), MaxInt));
+  // "TFoo = class;" is a forward declaration and "TFoo = class of TBar" a
+  // metaclass - neither has a base class to change. An EMPTY rest is
+  // neither: that is a class whose body follows on the next lines, which
+  // is the shape issue #46 reported.
+  if StartsStr(';', Rest) then
+  begin
+    AWhy := 'a forward declaration has no ancestor list';
+    Exit;
+  end;
+  if StartsText('of ', Rest) then
+  begin
+    AWhy := 'a class reference type has no ancestor list';
+    Exit;
+  end;
+
+  P := 0;
+  for var I := KP + Length('class') to Length(Code) do
+    if Code[I] = '(' then
+    begin
+      P := I;
+      Break;
+    end
+    else if Code[I] = ')' then
+      Break;
+
+  if P = 0 then
+  begin
+    // No list yet: Delphi writes the parentheses AFTER the class
+    // modifiers - "TFoo = class abstract(TBase)".
+    Stop := KP + Length('class');
+    while True do
+    begin
+      var I := Stop;
+      while (I <= Length(Code)) and CharInSet(Code[I], [' ', #9]) do Inc(I);
+      var W := '';
+      while (I <= Length(Code)) and IsIdentChar(Code[I]) do
+      begin
+        W := W + Code[I];
+        Inc(I);
+      end;
+      if SameText(W, 'abstract') or SameText(W, 'sealed') then
+        Stop := I
+      else
+        Break;
+    end;
+    ANewLine := Copy(AHeaderLine, 1, Stop - 1) + '(' + ANewBase + ')' +
+      Copy(AHeaderLine, Stop, MaxInt);
+    Exit(True);
+  end;
+
+  Q := 0;
+  for var I := P + 1 to Length(Code) do
+    if Code[I] = ')' then
+    begin
+      Q := I;
+      Break;
+    end;
+  if Q = 0 then
+  begin
+    AWhy := 'the ancestor list is not closed on the class header line';
+    Exit;
+  end;
+
+  // The first entry is the base class (Delphi allows only one), so its
+  // span is what gets replaced - every interface behind it stays.
+  Start := P + 1;
+  while (Start < Q) and CharInSet(Code[Start], [' ', #9]) do Inc(Start);
+  Stop := Start;
+  while (Stop < Q) and (Code[Stop] <> ',') do Inc(Stop);
+  var Current := Trim(Copy(Code, Start, Stop - Start));
+  if Current = '' then
+  begin
+    // "TFoo = class()" - nothing to replace, so put the base in.
+    ANewLine := Copy(AHeaderLine, 1, P) + ANewBase +
+      Copy(AHeaderLine, P + 1, MaxInt);
+    Exit(True);
+  end;
+  if SameText(Current, ANewBase) then
+  begin
+    AWhy := Format('it already derives from %s', [ANewBase]);
+    Exit;
+  end;
+  ANewLine := Copy(AHeaderLine, 1, Start - 1) + ANewBase +
+    Copy(AHeaderLine, Start + Length(Current), MaxInt);
+  Result := True;
+end;
+
+class function TExtractInterfaceEngine.BuildIInterfaceDeclBlock(
+  AHasNewInstance, AHasAfterConstruction: Boolean): string;
+begin
+  Result :=
+    '  private' + sLineBreak +
+    '    FRefCount: Integer;' + sLineBreak +
+    '  protected' + sLineBreak +
+    '    function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;' + sLineBreak +
+    '    function _AddRef: Integer; stdcall;' + sLineBreak +
+    '    function _Release: Integer; stdcall;';
+  if AHasNewInstance and AHasAfterConstruction then Exit;
+  Result := Result + sLineBreak + '  public';
+  if not AHasAfterConstruction then
+    Result := Result + sLineBreak +
+      '    procedure AfterConstruction; override;';
+  if not AHasNewInstance then
+    Result := Result + sLineBreak +
+      '    class function NewInstance: TObject; override;';
 end;
 
 { ---------- TProjectInterfaceScanner ---------- }

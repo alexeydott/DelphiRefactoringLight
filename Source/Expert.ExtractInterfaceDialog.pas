@@ -58,6 +58,19 @@ type
     FLblPreview: TLabel;
     FMemoPreview: TMemo;
 
+    /// <summary>Issue #46: a class that provides no IInterface cannot
+    ///  implement the extracted interface at all. The panel says so and
+    ///  offers the ancestor change; it stays hidden when there is
+    ///  nothing to report.</summary>
+    FPnlIInterface: TPanel;
+    FLblIInterface: TLabel;
+    /// <summary>What to do about it - the two halves of the offer plus
+    ///  "nothing", because the plugin can carry both out itself (user,
+    ///  2026-10-17). Item 0 is always "leave it": a class that is held
+    ///  by a plain reference today must not become reference-counted
+    ///  behind the user's back.</summary>
+    FCmbIInterface: TComboBox;
+
     FBtnOk: TButton;
     FBtnCancel: TButton;
 
@@ -104,6 +117,10 @@ type
     procedure DoPresetProperties(Sender: TObject);
     procedure DoPresetFields(Sender: TObject);
     procedure DoPresetNone(Sender: TObject);
+    procedure DoIInterfaceChoice(Sender: TObject);
+    /// <summary>Fills the IInterface panel from FInfo.IInterface, which the
+    ///  wizard filled before the dialog was built.</summary>
+    procedure RefreshIInterfaceHint;
 
     /// <summary>Toggles the visibility section that begins at the given
     ///  CheckListBox row index: walks forward until the next header (or
@@ -178,6 +195,7 @@ begin
     FCurrentInterfaceKey := UpperCase(FInfo.InterfaceName);
   RefreshExistingMemberMarks;
   RefreshPreview;
+  RefreshIInterfaceHint;
   EnableThemes(Self);
   PrepareDialog(Self, AOwner);
 end;
@@ -288,8 +306,36 @@ begin
   // Bottom button strip. MUST be its own alBottom panel so the buttons
   // get a reserved area; otherwise alClient panels added later cover
   // them up.
+  // Issue #46. TWO alBottom siblings are ordered by their TOP, not by the
+  // order they were created in, so both get an explicit one - the button
+  // bar has to stay below the hint.
+  FPnlIInterface := TPanel.Create(Self);
+  FPnlIInterface.Parent := Self;
+  FPnlIInterface.Top := 10000;
+  FPnlIInterface.Align := alBottom;
+  FPnlIInterface.Height := 62;
+  FPnlIInterface.BevelOuter := bvNone;
+  FPnlIInterface.Visible := False;
+
+  FLblIInterface := TLabel.Create(Self);
+  FLblIInterface.Parent := FPnlIInterface;
+  FLblIInterface.SetBounds(Pad, 4, ClientWidth - 2 * Pad, 32);
+  // AutoSize + WordWrap measures against the DEFAULT width, which makes
+  // an invisible giant out of the label (CLAUDE.md, VCL pitfalls).
+  FLblIInterface.AutoSize := False;
+  FLblIInterface.WordWrap := True;
+  FLblIInterface.Anchors := [akLeft, akTop, akRight];
+
+  FCmbIInterface := TComboBox.Create(Self);
+  FCmbIInterface.Parent := FPnlIInterface;
+  FCmbIInterface.SetBounds(Pad, 36, ClientWidth - 2 * Pad, 24);
+  FCmbIInterface.Anchors := [akLeft, akTop, akRight];
+  FCmbIInterface.Style := csDropDownList;
+  FCmbIInterface.OnChange := DoIInterfaceChoice;
+
   var PnlBottom: TPanel := TPanel.Create(Self);
   PnlBottom.Parent := Self;
+  PnlBottom.Top := 20000;
   PnlBottom.Align := alBottom;
   PnlBottom.Height := 44;
   PnlBottom.BevelOuter := bvNone;
@@ -436,6 +482,54 @@ begin
   Obj := FClb.Items.Objects[ARow];
   if Obj = nil then Exit;
   Result := NativeInt(Obj) - 1;
+end;
+
+procedure TExtractInterfaceDialog.DoIInterfaceChoice(Sender: TObject);
+begin
+  FInfo.ChangeBaseTo := '';
+  FInfo.AddIInterface := False;
+  if FCmbIInterface = nil then Exit;
+  // The item's own OBJECT says what it means, so the order of the items
+  // and the two cases (with and without an ancestor suggestion) cannot
+  // disagree about what index 1 is.
+  case NativeInt(FCmbIInterface.Items.Objects[FCmbIInterface.ItemIndex]) of
+    1: FInfo.ChangeBaseTo := FInfo.IInterface.SuggestedAncestor;
+    2: FInfo.AddIInterface := True;
+  end;
+end;
+
+procedure TExtractInterfaceDialog.RefreshIInterfaceHint;
+begin
+  if (FPnlIInterface = nil) or (FLblIInterface = nil) then Exit;
+  FPnlIInterface.Visible := not FInfo.IInterface.Ok;
+  if FInfo.IInterface.Ok then Exit;
+
+  FLblIInterface.Caption :=
+    'This class cannot implement an interface as it stands: ' +
+    FInfo.IInterface.Reason + '. The extracted interface is written either ' +
+    'way, but the class will not compile until that is fixed.';
+  // BOTH halves of the offer are carried out by the extraction itself -
+  // naming a second command was the version before (user, 2026-10-17:
+  // "Wir koennen das doch direkt selbst machen").
+  FCmbIInterface.Items.Clear;
+  FCmbIInterface.Items.AddObject(
+    Format('Leave %s as it is - the interface will not compile with it yet',
+      [FInfo.ClassName]), TObject(0));
+  if FInfo.IInterface.SuggestedAncestor <> '' then
+    FCmbIInterface.Items.AddObject(
+      Format('Derive it from %s - reference-counted, so the instance frees ' +
+        'itself when the last interface reference drops and explicit Free ' +
+        'calls have to go', [FInfo.IInterface.SuggestedAncestor]),
+      TObject(1));
+  FCmbIInterface.Items.AddObject(
+    Format('Add IInterface support to %s itself - QueryInterface, _AddRef, ' +
+      '_Release and the reference counting go into the class, its ancestor ' +
+      'stays', [FInfo.ClassName]), TObject(2));
+  // DELIBERATELY "leave it": both actions change how the instance is
+  // freed, which is a second reading, and this project does not preselect
+  // what has one.
+  FCmbIInterface.ItemIndex := 0;
+  DoIInterfaceChoice(nil);
 end;
 
 procedure TExtractInterfaceDialog.RefreshPreview;

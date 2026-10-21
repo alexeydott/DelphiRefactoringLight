@@ -45,6 +45,14 @@ function MakeFixId(AHash: Cardinal; AGen, AIndex: Integer): string;
 function ParseFixId(const AId: string; out AHash: Cardinal;
   out AGen, AIndex: Integer): Boolean;
 
+/// <summary>Sets the answer's "note", replacing one that is already there.
+///  TJSONObject.AddPair appends, so two places adding a note produce a
+///  DUPLICATE KEY - valid JSON of which a parser keeps one, its choice
+///  (reported by a reviewing model, 2026-10-19: lsp_hover answered with two
+///  "note" keys when DelphiLSP said nothing). Use this instead of AddPair
+///  for any field a second code path may also set.</summary>
+procedure SetJsonNote(ARes: TJSONObject; const AText: string);
+
 type
   /// <summary>One changed line of a PREVIEW. Line is 1-based in the OLD
   ///  content; Before = '' marks a line the edit inserts there, After = ''
@@ -655,6 +663,18 @@ begin
   if not TryStrToInt(Rest, AIndex) or (AIndex < 0) then Exit;
   AHash := Cardinal(H);
   Result := True;
+end;
+
+procedure SetJsonNote(ARes: TJSONObject; const AText: string);
+var
+  Old: TJSONPair;
+begin
+  if ARes = nil then Exit;
+  // RemovePair hands the pair over to us, so it has to be freed here - and
+  // it is what keeps a second note from becoming a second KEY.
+  Old := ARes.RemovePair('note');
+  if Old <> nil then Old.Free;
+  ARes.AddPair('note', AText);
 end;
 
 function DiagnosticsToJson(const AFile: string; AHash: Cardinal;

@@ -142,12 +142,11 @@ end;
 // ---------------------------------------------------------------------------
 
 function UnderBdsRoot(const AFileName: string): Boolean;
-var
-  Root: string;
 begin
-  Root := FindBdsRoot;
-  Result := (Root <> '') and
-    AFileName.ToLower.StartsWith(IncludeTrailingPathDelimiter(Root).ToLower);
+  // The project checks ask the same question (1.31.3), so the rule lives
+  // in ONE place - a shipped RTL/VCL/Indy source is not ours to rewrite,
+  // whether the user Ctrl+clicked into it or a check listed it.
+  Result := UnderInstallRoot(AFileName, FindBdsRoot);
 end;
 
 function IsReadOnlyFile(const AFileName: string): Boolean;

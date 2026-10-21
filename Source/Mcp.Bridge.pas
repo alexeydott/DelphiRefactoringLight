@@ -185,7 +185,9 @@ begin
      (AName = 'extract_interface') or (AName = 'extract_method') or
      (AName = 'add_iinterface') or (AName = 'get_quick_fixes') or
      (AName = 'convert_properties') or (AName = 'expand_includes') or
-     (AName = 'edit_method') or (AName = 'line_endings') then
+     (AName = 'edit_method') or (AName = 'line_endings') or
+     (AName = 'unused_units') or (AName = 'project_open') or
+     (AName = 'project_close') then
     Exit(twLong);
 
   // Reads, single-buffer edits and single LSP requests - the IDE answers
@@ -195,11 +197,13 @@ begin
      (AName = 'add_unit') or (AName = 'remove_unit') or
      (AName = 'extract_variable') or (AName = 'wrap_try_finally') or
      (AName = 'declare_constant') or
-     (AName = 'file_encoding') or
+     (AName = 'file_encoding') or (AName = 'settings') or
+     (AName = 'project_files') or
      AName.StartsWith('buffer_') or AName.StartsWith('scratch_') or
      AName.StartsWith('lsp_') or
-     // the bridge's own two: they never leave this process
-     (AName = 'ide_instances') or (AName = 'select_ide') then
+     // the bridge's own three: they never leave this process
+     (AName = 'ide_instances') or (AName = 'select_ide') or
+     (AName = 'guide') then
     Exit(twQuick);
 
   Result := twUnclassified;
@@ -235,7 +239,10 @@ end;
 
 function IsLocalTool(const AName: string): Boolean;
 begin
-  Result := (AName = 'ide_instances') or (AName = 'select_ide');
+  // The guide is static text: it needs no IDE, and a session that starts
+  // before the IDE is up is exactly when it is wanted.
+  Result := (AName = 'ide_instances') or (AName = 'select_ide') or
+    (AName = 'guide');
 end;
 
 // Everything but the bridge's own two tools goes to an IDE - which one
@@ -684,7 +691,8 @@ begin
       if AParams.GetValue('arguments') is TJSONObject then
         Args := TJSONObject(AParams.GetValue('arguments'));
     end;
-    if Name = 'ide_instances' then AResult := CallIdeInstances
+    if Name = 'guide' then AResult := ToolResult(McpGuideText, False)
+    else if Name = 'ide_instances' then AResult := CallIdeInstances
     else if Name = 'select_ide' then AResult := CallSelectIde(Args)
     else if IsForwardedTool(Name) then AResult := CallForward(Name, Args)
     else

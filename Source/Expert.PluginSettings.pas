@@ -24,6 +24,23 @@ unit Expert.PluginSettings;
 interface
 
 type
+  /// <summary>What kind of value a setting holds - all a caller needs to
+  ///  know to write one as text.</summary>
+  TPluginSettingKind = (pskBool, pskInt, pskString);
+
+  /// <summary>One setting, described well enough to be listed, validated
+  ///  and written by NAME. The same array drives Save(), so a setting
+  ///  cannot be in one and missing from the other - the shape that made
+  ///  the settings migration lose five values (audit #37, L4e).</summary>
+  TPluginSettingInfo = record
+    Name: string;        // the registry value name, and the tool's name
+    Kind: TPluginSettingKind;
+    DefaultText: string;
+    Min, Max: Integer;   // pskInt only (Min = Max = 0: no range)
+    Choices: string;     // pskInt with named values: "0 = revision, ..."
+    Summary: string;     // one line - what it does
+  end;
+
   TPluginSettings = class
   strict private
     class var FPrewarmLspOnProjectOpen: Boolean;
@@ -42,6 +59,12 @@ type
     class var FLineEndingCheck: Boolean;
     class var FLineEndingAutoFix: Boolean;
     class var FLoaded: Boolean;
+    // Session-only overrides: the names, and the text the registry
+    // still holds for them (see MarkSessionOnly).
+    class var FSessionNames: TArray<string>;
+    class var FSessionValues: TArray<string>;
+    class function ReadPersistedText(
+      const AInfo: TPluginSettingInfo): string; static;
     class function LegacyRegistryKey: string; static;
     class procedure MigrateLegacyKey; static;
   public
@@ -151,6 +174,40 @@ type
     ///  yes to once. The dialog's "always" option is what turns it on.</summary>
     class property LineEndingAutoFix: Boolean
       read FLineEndingAutoFix write FLineEndingAutoFix;
+
+    /// <summary>Every setting, in the order the options page shows
+    ///  them. The ONE list: Save writes exactly these.</summary>
+    class function SettingInfos: TArray<TPluginSettingInfo>; static;
+    /// <summary>The description of one setting, by name (case-insensitive).
+    ///  </summary>
+    class function FindSetting(const AName: string;
+      out AInfo: TPluginSettingInfo): Boolean; static;
+    /// <summary>The current value of one setting as text ('true' / 'false'
+    ///  for a switch), '' plus False for an unknown name.</summary>
+    class function GetValueText(const AName: string;
+      out AText: string): Boolean; static;
+    /// <summary>Writes one setting from text, in MEMORY - it takes effect
+    ///  at once and the caller decides whether Save() makes it permanent.
+    ///  Rejects an unknown name, a value that is not of the right kind and
+    ///  an integer outside its range, each with a reason.</summary>
+    class function SetValueText(const AName, AText: string;
+      out AError: string): Boolean; static;
+
+    /// <summary>Marks a setting as "this IDE instance only": Save() then
+    ///  writes the value the REGISTRY had, not the current one, so an
+    ///  unrelated Save elsewhere (the rename dialog stores its scope, the
+    ///  uses cleanup its keep list) cannot make a temporary change
+    ///  permanent behind the user''s back. Clearing the mark makes the
+    ///  current value ordinary again, and the next Save persists it.
+    ///  </summary>
+    class procedure MarkSessionOnly(const AName: string;
+      AOn: Boolean); static;
+    /// <summary>True while that setting is a session-only override, with
+    ///  the text the registry still holds.</summary>
+    class function IsSessionOnly(const AName: string;
+      out APersisted: string): Boolean; static;
+    /// <summary>The names that are session-only right now.</summary>
+    class function SessionOnlyNames: TArray<string>; static;
 
     class function DefaultPrewarm: Boolean; static;
   end;
@@ -384,6 +441,307 @@ begin
   end;
 end;
 
+class function TPluginSettings.SettingInfos: TArray<TPluginSettingInfo>;
+
+  function B(const AName, ADefault, ASummary: string): TPluginSettingInfo;
+  begin
+    Result := Default(TPluginSettingInfo);
+    Result.Name := AName;
+    Result.Kind := pskBool;
+    Result.DefaultText := ADefault;
+    Result.Summary := ASummary;
+  end;
+
+  function I(const AName, ADefault: string; AMin, AMax: Integer;
+    const AChoices, ASummary: string): TPluginSettingInfo;
+  begin
+    Result := Default(TPluginSettingInfo);
+    Result.Name := AName;
+    Result.Kind := pskInt;
+    Result.DefaultText := ADefault;
+    Result.Min := AMin;
+    Result.Max := AMax;
+    Result.Choices := AChoices;
+    Result.Summary := ASummary;
+  end;
+
+  function S(const AName, ADefault, ASummary: string): TPluginSettingInfo;
+  begin
+    Result := Default(TPluginSettingInfo);
+    Result.Name := AName;
+    Result.Kind := pskString;
+    Result.DefaultText := ADefault;
+    Result.Summary := ASummary;
+  end;
+
+begin
+  Result := [
+    B('PrewarmLspOnProjectOpen', BoolToStr(DefaultPrewarm, True),
+      'Start our own DelphiLSP and index the project as soon as it opens, ' +
+      'so the first refactoring does not wait for a cold start. Costs one ' +
+      'more DelphiLsp process while the IDE is open.'),
+    B('VerifySession', 'True',
+      'Verify the candidates of find references / rename through a SECOND ' +
+      'DelphiLsp session in agent mode: about twice as fast and never ' +
+      'aborted after 10 s, at the price of one more process (~290 MB) that ' +
+      'is shut down again after 10 idle minutes.'),
+    B('LspLogging', 'False',
+      'Start our DelphiLsp with -LogModes 255, so %TEMP%\DelphiLSP\' +
+      'RefactoringLight*.log records every request and its duration. The ' +
+      'only way to diagnose a session that answers nothing; the log grows.'),
+    B('ScopeIncludeOpenUnits', 'True',
+      'Project-wide scans also look at units that are OPEN in the editor ' +
+      'but not part of the project. The unit at the caret is always ' +
+      'included, whatever this says.'),
+    B('ScopeIncludeUsedUnits', 'False',
+      '...and at units reachable through uses clauses, resolved via the ' +
+      'identifier index and never below the RAD Studio installation. Off ' +
+      'by default: with big libraries that is thousands of files.'),
+    I('RenameScope', '0', 0, 3, '0 = whole project, 1 = current unit, ' +
+      '2 = current method, 3 = selected units',
+      'The scope the rename dialog opens with - it remembers the last one.'),
+    B('RenameBackup', 'True',
+      'The rename dialog''s "create backup" box, remembered. A backup is ' +
+      'written to %LOCALAPPDATA%\DelphiRefactoringLight\backup\<stamp>\ ' +
+      'before the first file is changed.'),
+    S('UsesCleanupKeepUnits', '',
+      'Units the uses cleanup must never offer for removal, as masks ' +
+      'separated by ";" (dxSkin*;MyCompany.Components.*). For a false ' +
+      'positive the designer query cannot cover. Empty by default - a mask ' +
+      'like cx* would also protect cx units that really are unused.'),
+    B('LineEndingCheck', 'True',
+      'Check a unit''s line endings when the IDE opens it and warn when ' +
+      'they are not plain CRLF. Delphi copes badly with LF-only and worst ' +
+      'with MIXED endings, and the open is the moment at which nobody has ' +
+      'edited the buffer yet.'),
+    B('LineEndingAutoFix', 'False',
+      '...and correct it without asking. Off by default: rewriting every ' +
+      'line break is a change somebody should have said yes to once.'),
+    B('LiveBlame', 'False',
+      'Live blame in the editor gutter (git and svn). Off by default: it ' +
+      'runs blame per file, and not every project is a working copy.'),
+    I('BlameInfo', '1', 0, 2,
+      '0 = revision, 1 = revision + author, 2 = revision + author + age',
+      'What the blame column shows.'),
+    I('BlameColumnWidth', '150', 0, 600, '',
+      'Pixels the gutter is WIDENED by while live blame is on. 0 = do not ' +
+      'touch the gutter at all (only the age stripe and the caret line) - ' +
+      'the polite setting when another add-on uses that space.'),
+    I('BlameColumnOffset', '17', 0, 600, '',
+      'Pixels between the start of the gutter''s data area and our column. ' +
+      '17 is measured against the Parnassus Navigator, which ships with ' +
+      'Delphi and draws at the very left of the same area.'),
+    B('BlameUseTortoise', 'True',
+      'Use TortoiseGit / TortoiseSVN for the commit and blame views when ' +
+      'they are installed, and fall back to the built-in ones when they ' +
+      'are not.')
+  ];
+end;
+
+class function TPluginSettings.FindSetting(const AName: string;
+  out AInfo: TPluginSettingInfo): Boolean;
+begin
+  AInfo := Default(TPluginSettingInfo);
+  for var Info in SettingInfos do
+    if SameText(Info.Name, AName) then
+    begin
+      AInfo := Info;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+// The ONE place that maps a name to its storage. Every caller - the tool,
+// Save(), the session-only bookkeeping - goes through these two, so a new
+// setting is wired up once.
+class function TPluginSettings.GetValueText(const AName: string;
+  out AText: string): Boolean;
+begin
+  if not FLoaded then Load;
+  Result := True;
+  if SameText(AName, 'PrewarmLspOnProjectOpen') then AText := BoolToStr(FPrewarmLspOnProjectOpen, True)
+  else if SameText(AName, 'VerifySession') then AText := BoolToStr(FVerifySession, True)
+  else if SameText(AName, 'LspLogging') then AText := BoolToStr(FLspLogging, True)
+  else if SameText(AName, 'ScopeIncludeOpenUnits') then AText := BoolToStr(FScopeIncludeOpenUnits, True)
+  else if SameText(AName, 'ScopeIncludeUsedUnits') then AText := BoolToStr(FScopeIncludeUsedUnits, True)
+  else if SameText(AName, 'RenameScope') then AText := IntToStr(FRenameScope)
+  else if SameText(AName, 'RenameBackup') then AText := BoolToStr(FRenameBackup, True)
+  else if SameText(AName, 'UsesCleanupKeepUnits') then AText := FUsesCleanupKeepUnits
+  else if SameText(AName, 'LineEndingCheck') then AText := BoolToStr(FLineEndingCheck, True)
+  else if SameText(AName, 'LineEndingAutoFix') then AText := BoolToStr(FLineEndingAutoFix, True)
+  else if SameText(AName, 'LiveBlame') then AText := BoolToStr(FLiveBlame, True)
+  else if SameText(AName, 'BlameInfo') then AText := IntToStr(FBlameInfo)
+  else if SameText(AName, 'BlameColumnWidth') then AText := IntToStr(FBlameColumnWidth)
+  else if SameText(AName, 'BlameColumnOffset') then AText := IntToStr(FBlameColumnOffset)
+  else if SameText(AName, 'BlameUseTortoise') then AText := BoolToStr(FBlameUseTortoise, True)
+  else
+  begin
+    AText := '';
+    Result := False;
+  end;
+end;
+
+class function TPluginSettings.SetValueText(const AName, AText: string;
+  out AError: string): Boolean;
+var
+  Info: TPluginSettingInfo;
+  B: Boolean;
+  N: Integer;
+  T: string;
+begin
+  AError := '';
+  Result := False;
+  if not FLoaded then Load;
+  if not FindSetting(AName, Info) then
+  begin
+    AError := '"' + AName + '" is not a setting of this plugin - call ' +
+      'settings without arguments for the list';
+    Exit;
+  end;
+
+  T := Trim(AText);
+  B := False;
+  N := 0;
+  case Info.Kind of
+    pskBool:
+      begin
+        // The shapes a caller may plausibly send; anything else is a
+        // mistake and is named rather than read as False.
+        if SameText(T, 'true') or SameText(T, '1') or SameText(T, 'on') or
+           SameText(T, 'yes') then B := True
+        else if SameText(T, 'false') or SameText(T, '0') or
+                SameText(T, 'off') or SameText(T, 'no') then B := False
+        else
+        begin
+          AError := Info.Name + ' is a switch - pass true or false, not "' +
+            AText + '"';
+          Exit;
+        end;
+      end;
+    pskInt:
+      begin
+        if not TryStrToInt(T, N) then
+        begin
+          AError := Info.Name + ' is a number - "' + AText + '" is not one';
+          Exit;
+        end;
+        if (Info.Max > Info.Min) and ((N < Info.Min) or (N > Info.Max)) then
+        begin
+          AError := Format('%s must be between %d and %d, not %d',
+            [Info.Name, Info.Min, Info.Max, N]);
+          Exit;
+        end;
+      end;
+  end;
+
+  if SameText(AName, 'PrewarmLspOnProjectOpen') then FPrewarmLspOnProjectOpen := B
+  else if SameText(AName, 'VerifySession') then FVerifySession := B
+  else if SameText(AName, 'LspLogging') then FLspLogging := B
+  else if SameText(AName, 'ScopeIncludeOpenUnits') then FScopeIncludeOpenUnits := B
+  else if SameText(AName, 'ScopeIncludeUsedUnits') then FScopeIncludeUsedUnits := B
+  else if SameText(AName, 'RenameScope') then FRenameScope := N
+  else if SameText(AName, 'RenameBackup') then FRenameBackup := B
+  else if SameText(AName, 'UsesCleanupKeepUnits') then FUsesCleanupKeepUnits := Trim(AText)
+  else if SameText(AName, 'LineEndingCheck') then FLineEndingCheck := B
+  else if SameText(AName, 'LineEndingAutoFix') then FLineEndingAutoFix := B
+  else if SameText(AName, 'LiveBlame') then FLiveBlame := B
+  else if SameText(AName, 'BlameInfo') then FBlameInfo := N
+  else if SameText(AName, 'BlameColumnWidth') then FBlameColumnWidth := N
+  else if SameText(AName, 'BlameColumnOffset') then FBlameColumnOffset := N
+  else if SameText(AName, 'BlameUseTortoise') then FBlameUseTortoise := B
+  else
+  begin
+    // FindSetting said yes, so this can only be a setting that was added
+    // to the descriptor and nowhere else - and silence would make the
+    // answer a lie.
+    AError := Info.Name + ' is described but not wired up - please report this';
+    Exit;
+  end;
+  Result := True;
+end;
+
+class procedure TPluginSettings.MarkSessionOnly(const AName: string;
+  AOn: Boolean);
+var
+  Info: TPluginSettingInfo;
+  Persisted: string;
+  Keep: TArray<string>;
+  KeepVal: TArray<string>;
+begin
+  if not FindSetting(AName, Info) then Exit;
+  Keep := nil;
+  KeepVal := nil;
+  for var I := 0 to High(FSessionNames) do
+    if not SameText(FSessionNames[I], Info.Name) then
+    begin
+      Keep := Keep + [FSessionNames[I]];
+      KeepVal := KeepVal + [FSessionValues[I]];
+    end;
+  if AOn then
+  begin
+    // What the registry holds right NOW is what Save must keep writing.
+    Persisted := ReadPersistedText(Info);
+    Keep := Keep + [Info.Name];
+    KeepVal := KeepVal + [Persisted];
+  end;
+  FSessionNames := Keep;
+  FSessionValues := KeepVal;
+end;
+
+class function TPluginSettings.IsSessionOnly(const AName: string;
+  out APersisted: string): Boolean;
+begin
+  APersisted := '';
+  for var I := 0 to High(FSessionNames) do
+    if SameText(FSessionNames[I], AName) then
+    begin
+      APersisted := FSessionValues[I];
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+class function TPluginSettings.SessionOnlyNames: TArray<string>;
+begin
+  Result := Copy(FSessionNames);
+end;
+
+// What the registry holds for one setting, as text - its default when the
+// value is not there (or is of the wrong type, which the defensive readers
+// turn into the default anyway).
+class function TPluginSettings.ReadPersistedText(
+  const AInfo: TPluginSettingInfo): string;
+var
+  Reg: TRegistry;
+begin
+  Result := AInfo.DefaultText;
+  try
+    Reg := TRegistry.Create(KEY_READ);
+    try
+      Reg.RootKey := HKEY_CURRENT_USER;
+      if Reg.OpenKeyReadOnly(RegistryKey) then
+      try
+        case AInfo.Kind of
+          pskBool:
+            Result := BoolToStr(ReadBoolDef(Reg, AInfo.Name,
+              SameText(AInfo.DefaultText, 'True')), True);
+          pskInt:
+            Result := IntToStr(ReadIntDef(Reg, AInfo.Name,
+              StrToIntDef(AInfo.DefaultText, 0)));
+          pskString:
+            Result := ReadStrDef(Reg, AInfo.Name, AInfo.DefaultText);
+        end;
+      finally
+        Reg.CloseKey;
+      end;
+    finally
+      Reg.Free;
+    end;
+  except
+    // Same rule as Load: a setting must never cost more than its value.
+  end;
+end;
+
 class procedure TPluginSettings.Save;
 var
   Reg: TRegistry;
@@ -393,21 +751,23 @@ begin
     Reg.RootKey := HKEY_CURRENT_USER;
     if Reg.OpenKey(RegistryKey, True) then
     try
-      Reg.WriteBool('PrewarmLspOnProjectOpen', FPrewarmLspOnProjectOpen);
-      Reg.WriteBool('LiveBlame', FLiveBlame);
-      Reg.WriteInteger('BlameColumnWidth', FBlameColumnWidth);
-      Reg.WriteInteger('BlameInfo', FBlameInfo);
-      Reg.WriteInteger('BlameColumnOffset', FBlameColumnOffset);
-      Reg.WriteBool('BlameUseTortoise', FBlameUseTortoise);
-      Reg.WriteBool('LspLogging', FLspLogging);
-      Reg.WriteBool('VerifySession', FVerifySession);
-      Reg.WriteBool('ScopeIncludeOpenUnits', FScopeIncludeOpenUnits);
-      Reg.WriteBool('ScopeIncludeUsedUnits', FScopeIncludeUsedUnits);
-      Reg.WriteInteger('RenameScope', FRenameScope);
-      Reg.WriteBool('RenameBackup', FRenameBackup);
-      Reg.WriteString('UsesCleanupKeepUnits', FUsesCleanupKeepUnits);
-      Reg.WriteBool('LineEndingCheck', FLineEndingCheck);
-      Reg.WriteBool('LineEndingAutoFix', FLineEndingAutoFix);
+      // Driven by the DESCRIPTOR, so a setting cannot be in the list the
+      // tool and the options page see and missing here (two hand-kept
+      // lists are what made the legacy migration drop five values -
+      // audit #37, L4e). A session-only override writes the text the
+      // registry already had, never the temporary value.
+      for var Info in SettingInfos do
+      begin
+        var Text: string;
+        if not IsSessionOnly(Info.Name, Text) then
+          if not GetValueText(Info.Name, Text) then Continue;
+        case Info.Kind of
+          pskBool: Reg.WriteBool(Info.Name, SameText(Trim(Text), 'True'));
+          pskInt: Reg.WriteInteger(Info.Name, StrToIntDef(Trim(Text),
+            StrToIntDef(Info.DefaultText, 0)));
+          pskString: Reg.WriteString(Info.Name, Text);
+        end;
+      end;
     finally
       Reg.CloseKey;
     end;

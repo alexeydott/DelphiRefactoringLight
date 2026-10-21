@@ -35,8 +35,9 @@ uses
   Expert.UnitAvailability, Expert.UsesEditor, Expert.UsesCleanup,
   Expert.ImplementationFinder, Expert.FindReferencesDialog, Expert.ScopeFiles,
   Expert.UsesGraph, Expert.DebugConsistency, Expert.DebugConsistencyDialog,
-  Expert.LineEndingDialog, Expert.FileEncodingCheck, Expert.LineEndingWatcher,
-  Expert.VcsBlame, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
+  Expert.LineEndingDialog, Expert.FileEncodingCheck, Expert.UnusedUnits,
+  Expert.UnusedUnitsDialog, Expert.LineEndingWatcher,
+  Expert.VcsBlame, Expert.BlameGutter, Expert.LspPrewarmer, Expert.RenameWizard, Expert.RenameDialog, Expert.LspManager,
   Expert.PluginSettings, Expert.IncludeExpansion, Expert.InterfaceLinks,
   Expert.SemanticReplace, Expert.SemanticReplaceWizard, Expert.MoveToUnit, Expert.SafeDelete,
   Expert.SafeDeletePlan, Expert.StatementRefactor, Expert.WithRefactorWizard,
@@ -1403,6 +1404,56 @@ begin
   // A real project easily yields 100+ rows of the same kind (stray DCUs
   // of a whole library output dir) - summarise by kind, then list at most
   // "max" rows so the answer stays readable.
+  // ---- the one thing this check can FIX -----------------------------------
+  // A .dcu that is OLDER than its own source, in a place where the compiler
+  // could use that source instead: then the .dcu shadows it and the answers
+  // describe an older version of the file. Moving it aside is reversible
+  // and cheap, so the check offers it - for the ids you name, like every
+  // other check here. Measured 2026-10-20: everything ELSE about .dcu files
+  // in that directory is NOT a fix - a unit the LSP loads from a .dcu
+  // answers with its source position, and removing one that is the only way
+  // to its unit costs the answer entirely.
+  var WantIds: TArray<string> := nil;
+  var IdArr := AArgs.GetValue<TJSONArray>('fix_ids', nil);
+  if IdArr <> nil then
+    for var V in IdArr do WantIds := WantIds + [UpperCase(Trim(V.Value))];
+  var DoApply := ArgBool(AArgs, 'apply');
+  if DoApply and (Length(WantIds) = 0) then
+    Exit(McpErr('apply needs "fix_ids" - list the findings first and name ' +
+      'the ones to act on. Only a finding the answer marks as fixable has a ' +
+      'cure here (a .dcu older than its source, in a place where the ' +
+      'compiler can use the source instead): it is MOVED into a ' +
+      'subdirectory of its own folder, never deleted.'));
+  var Moved := TDictionary<string, string>.Create;
+  var AsideDir := '';
+  try
+    if DoApply then
+      for var I in Issues do
+      begin
+        var Id := UpperCase(DebugIssueId(I));
+        var Wanted := False;
+        for var W in WantIds do
+          if W = Id then Wanted := True;
+        if not Wanted then Continue;
+        // Fixable is the per-FINDING answer: since 2.5.0 a dkLspDcu
+        // row can also be the directory itself (incomplete output),
+        // and the cure for that one is a build, not a move.
+        if (I.Kind <> dkLspDcu) or not I.Fixable then
+        begin
+          Moved.AddOrSetValue(Id, 'NOT fixed: this "' +
+            DebugIssueKindName(I.Kind) + '" finding has no fix here - ' +
+            I.Hint);
+          Continue;
+        end;
+        if AsideDir = '' then
+          AsideDir := DcuAsideFolder(ExtractFileDir(I.FileName));
+        var Target, MErr: string;
+        if MoveDcuAside(I.FileName, AsideDir, Target, MErr) then
+          Moved.AddOrSetValue(Id, 'moved to ' + Target)
+        else
+          Moved.AddOrSetValue(Id, 'NOT moved: ' + MErr);
+      end;
+
   var MaxRows := ArgInt(AArgs, 'max', 60);
   if MaxRows <= 0 then MaxRows := MaxInt;
   var Counts := TDictionary<string, Integer>.Create;
@@ -1436,6 +1487,11 @@ begin
     if I.Line > 0 then O.AddPair('line', TJSONNumber.Create(I.Line));
     O.AddPair('reason', I.Reason);
     if I.Hint <> '' then O.AddPair('hint', I.Hint);
+    O.AddPair('id', DebugIssueId(I));
+    if I.Fixable then O.AddPair('fixable', TJSONBool.Create(True));
+    var Outcome: string;
+    if Moved.TryGetValue(UpperCase(DebugIssueId(I)), Outcome) then
+      O.AddPair('result', Outcome);
     Arr.Add(O);
   end;
   var Res := TJSONObject.Create;
@@ -1444,10 +1500,48 @@ begin
   Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
   Res.AddPair('by_kind', Summary);
   Res.AddPair('issues', Arr);
-  if Arr.Count < Length(Issues) then
-    Res.AddPair('note', Format('%d of %d issues listed (problems first) - pass ' +
-      '"max" (0 = all) for more', [Arr.Count, Length(Issues)]));
+  if DoApply then
+  begin
+    var Done := 0;
+    var Failed := 0;
+    for var V in Moved.Values do
+      if V.StartsWith('NOT ') then Inc(Failed) else Inc(Done);
+    Res.AddPair('moved', TJSONNumber.Create(Done));
+    if Failed > 0 then Res.AddPair('notMoved', TJSONNumber.Create(Failed));
+    var AllIds: TArray<string> := nil;
+    for var I in Issues do AllIds := AllIds + [DebugIssueId(I)];
+    var Unknown := UnknownReportIds(AllIds, WantIds);
+    if Length(Unknown) > 0 then
+      Res.AddPair('unknownIds', string.Join(', ', Unknown) +
+        ' - no finding of this scan carries that id (fixed already, or an ' +
+        'id from an older scan - list again)');
+    Res.AddPair('note', AppliedByIdsNote(Done, Failed, Length(Unknown),
+      '.dcu file(s)', 'were moved aside', 'into ' + AsideDir) +
+      ' The LSP session does not notice by itself: lsp_restart makes the ' +
+      'next request start a session that reads the sources.');
+  end
+  else
+  begin
+    // What may be said about fixing comes from the findings themselves -
+    // a complete DCU output yields none of them, and most of those that
+    // exist have a build as their cure, not a move (measured live, 2.5.1).
+    var Fixable := 0;
+    for var I in Issues do
+      if (I.Kind = dkLspDcu) and I.Fixable then Inc(Fixable);
+    var Tail := DebugFixOfferNote(Fixable);
+    if Arr.Count < Length(Issues) then
+      Tail := Format('%d of %d issues listed (problems first) - pass ' +
+        '"max" (0 = all) for more.', [Arr.Count, Length(Issues)]) +
+        IfThen(Tail <> '', ' ' + Tail)
+    else if Tail = '' then
+      Tail := Format('%d finding(s), and none of them has a fix this tool ' +
+        'can apply.', [Length(Issues)]);
+    Res.AddPair('note', Tail);
+  end;
   Result := McpOk(Res);
+  finally
+    Moved.Free;
+  end;
 end;
 
 // ---------------------------------------------------------------------------
@@ -1950,10 +2044,11 @@ begin
   NewUnit := Trim(AArgs.GetValue<string>('new_unit', ''));
   if (AArgs.GetValue<string>('file', '') = '') or (L1 < 1) or (C1 < 1) or (NewUnit = '') then
     Exit(McpErr('arguments "file", "line", "column" (1-based) and "new_unit" are required'));
-  if SameText(ExtractFileExt(NewUnit), '.pas') then NewUnit := ChangeFileExt(NewUnit, '');
-  var NewFile := NewUnit;
-  if ExtractFilePath(NewFile) = '' then NewFile := ExtractFilePath(F) + NewFile;
-  NewFile := NewFile + '.pas';
+  // ONE rule for what a typed name means - the dialog uses the same one,
+  // so the tool cannot resolve a relative path differently than the menu
+  var PathProblem := '';
+  var NewFile := PlanNewUnitFile(NewUnit, F, PathProblem);
+  if NewFile = '' then Exit(McpErr(PathProblem));
   DoApply := ArgBool(AArgs, 'apply');
   Token := ArgStr(AArgs, 'token');
   var Ok := False;
@@ -3013,7 +3108,8 @@ begin
     begin
       Files := GatherEncodingCheckFiles;
       if Length(Files) > 0 then
-        Issues := CollectEncodingIssues(Files, From, Target, ReadEncodingBytes);
+        Issues := CollectEncodingIssues(Files, From, Target,
+          ReadEncodingBytes, nil, FindBdsRoot);
     end, False, AStop, Err) then Exit(McpErr(Err));
   if Length(Files) = 0 then Exit(McpErr('no project loaded / no source files'));
 
@@ -3098,6 +3194,101 @@ begin
   end;
 end;
 
+function ToolUnusedUnits(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Facts: TArray<TUnitFacts>;
+  Issues: TArray<TUnusedUnitIssue>;
+  Notes, Ids: TArray<string>;
+  Err, GatherErr: string;
+begin
+  var Max := ArgInt(AArgs, 'max', 200);
+
+  // The gathering reads the project and the editor buffers, so it belongs
+  // on the main thread. The CLASSIFICATION does not - it runs the
+  // production parser over the candidates (15.7 ms each, measured), and
+  // doing that on the main thread would stand the IDE still for seconds.
+  Facts := nil;
+  GatherErr := '';
+  if not McpRunOnMain(
+    procedure
+    begin
+      Facts := GatherUnusedUnitFacts(GatherErr);
+    end, False, AStop, Err) then Exit(McpErr(Err));
+  if GatherErr <> '' then Exit(McpErr(GatherErr));
+  if Length(Facts) = 0 then Exit(McpErr('no project loaded / no source files'));
+
+  Issues := CollectUnusedProjectUnits(Facts, Notes, UnusedUnitDetailsReader());
+
+  var Res := TJSONObject.Create;
+  try
+    var Safe := 0;
+    var Hint := 0;
+    var NoSrc := 0;
+    var Unknown := 0;
+    Ids := nil;
+    for var Issue in Issues do
+    begin
+      Ids := Ids + [Issue.Id];
+      case Issue.Kind of
+        uukSafe: Inc(Safe);
+        uukInitCode: Inc(Hint);
+        uukNoSource: Inc(NoSrc);
+        uukUnreadable: Inc(Unknown);
+      end;
+    end;
+
+    var InProject := ProjectUnitCount(Facts);
+    Res.AddPair('projectUnits', TJSONNumber.Create(InProject));
+    // The rest of Facts are REFERENCE SOURCES - units on the search path
+    // whose uses clauses count, but which the project does not list. They
+    // are worth naming; they are not the denominator.
+    Res.AddPair('referenceSources',
+      TJSONNumber.Create(Length(Facts) - InProject));
+    Res.AddPair('total', TJSONNumber.Create(Length(Issues)));
+    Res.AddPair('unused', TJSONNumber.Create(Safe));
+    Res.AddPair('withInitCode', TJSONNumber.Create(Hint));
+    // The project lists them and no source of that name was found - that
+    // is a finding of its own, not a gap in what was looked at.
+    Res.AddPair('noSourceFound', TJSONNumber.Create(NoSrc));
+    Res.AddPair('notChecked', TJSONNumber.Create(Unknown));
+
+    // The counts are always complete; the ROWS are capped. Saying which is
+    // which is the whole point - a budget that renames "found" into
+    // "listed" is the answer nobody can check.
+    var Arr := TJSONArray.Create;
+    for var Idx in SelectReportRows(Ids, nil, Max) do
+    begin
+      var Issue := Issues[Idx];
+      var O := TJSONObject.Create;
+      O.AddPair('id', Issue.Id);
+      O.AddPair('unit', Issue.UnitName);
+      O.AddPair('file', Issue.FileName);
+      case Issue.Kind of
+        uukSafe: O.AddPair('kind', 'unused');
+        uukInitCode: O.AddPair('kind', 'unused_with_init_code');
+        uukNoSource: O.AddPair('kind', 'no_source_found');
+        uukUnreadable: O.AddPair('kind', 'not_checked');
+      end;
+      O.AddPair('reason', Issue.Reason);
+      Arr.AddElement(O);
+    end;
+    Res.AddPair('rows', Arr);
+
+    var NoteArr := TJSONArray.Create;
+    for var N in Notes do NoteArr.Add(N);
+    Res.AddPair('notes', NoteArr);
+
+    Res.AddPair('note', 'Read-only: this check does not touch the project ' +
+      'file. "unused_with_init_code" is a HINT - such a unit is often in ' +
+      'the project to register itself. Only ONE layer is reported, so run ' +
+      'it again after removing something.');
+    Result := McpOk(Res);
+  except
+    Res.Free;
+    raise;
+  end;
+end;
+
 function ToolLineEndings(AArgs: TJSONObject; AStop: THandle): string;
 var
   Files, WantIds: TArray<string>;
@@ -3128,7 +3319,8 @@ begin
     begin
       Files := GatherLineEndingCheckFiles;
       if Length(Files) > 0 then
-        Issues := CollectLineEndingIssues(Files, ReadLineEndingBytes);
+        Issues := CollectLineEndingIssues(Files, ReadLineEndingBytes,
+          nil, FindBdsRoot);
     end, False, AStop, Err) then Exit(McpErr(Err));
   if Length(Files) = 0 then Exit(McpErr('no project loaded / no source files'));
 
@@ -3292,13 +3484,35 @@ begin
     Res.AddPair('duplicateGuids', TJSONNumber.Create(Dupes));
     Res.AddPair('withoutGuid', TJSONNumber.Create(Missing));
     Res.AddPair('entries', Arr);
+    // An id that matches nothing used to be dropped in silence while the
+    // note below said the places the caller named are done - the lie 1.25.1
+    // found in the line-ending tool, in the one answer nobody can check.
     if DoApply then
-      Res.AddPair('note', 'The declarations you named carry a fresh GUID now, ' +
+    begin
+      var AllIds: TArray<string> := nil;
+      for var E in Entries do AllIds := AllIds + [GuidEntryId(E)];
+      var Unknown := UnknownReportIds(AllIds, WantIds);
+      if Length(Unknown) > 0 then
+      begin
+        var UArr := TJSONArray.Create;
+        for var U in Unknown do UArr.Add(U);
+        Res.AddPair('unknownIds', UArr);
+      end;
+      // ...and the note says what really happened, counted from the
+      // outcomes (2.0.4: it asserted success after an apply that matched
+      // nothing at all).
+      var Done := 0;
+      var Failed := 0;
+      for var R in Applied.Values do
+        if R.StartsWith('NOT ') then Inc(Failed) else Inc(Done);
+      Res.AddPair('fixed', TJSONNumber.Create(Done));
+      if Failed > 0 then Res.AddPair('notFixed', TJSONNumber.Create(Failed));
+      Res.AddPair('note', AppliedByIdsNote(Done, Failed, Length(Unknown),
+        'declaration(s)', 'carry a fresh GUID now',
         'in the IDE buffer when the file was open (not saved) and on disk ' +
-        'otherwise; "result" says per entry what happened. The counts above ' +
-        'are from the scan BEFORE the change - run the check again to see ' +
-        'the state after it.')
-    else
+        'otherwise'));
+    end;
+    if not DoApply then
       Res.AddPair('note', 'A duplicate GUID makes Supports/QueryInterface ' +
         'return the WRONG object. An interface paired with a dispinterface ' +
         'on the same GUID is a type-library import and not counted. Nothing ' +
@@ -3417,12 +3631,33 @@ begin
     Res.AddPair('signatureMismatches', TJSONNumber.Create(Mismatch));
     Res.AddPair('aliasOnlyDifferences', TJSONNumber.Create(AliasOnly));
     Res.AddPair('issues', Arr);
+    // An id that matches nothing used to be dropped in silence while the
+    // note below said the places the caller named are done - the lie 1.25.1
+    // found in the line-ending tool, in the one answer nobody can check.
     if DoApply then
-      Res.AddPair('note', 'Fixed handlers are in the IDE buffers (not saved). ' +
-        'A missing handler is generated as an EMPTY method - in an inherited ' +
-        'form that shadows the ancestor''s handler, which is why nothing is ' +
-        'fixed without naming its id.')
-    else
+    begin
+      var AllIds: TArray<string> := nil;
+      for var Iss in Issues do AllIds := AllIds + [DfmIssueId(Iss)];
+      var Unknown := UnknownReportIds(AllIds, WantIds);
+      if Length(Unknown) > 0 then
+      begin
+        var UArr := TJSONArray.Create;
+        for var U in Unknown do UArr.Add(U);
+        Res.AddPair('unknownIds', UArr);
+      end;
+      var Done := 0;
+      var Failed := 0;
+      for var R in Applied.Values do
+        if R.StartsWith('NOT ') then Inc(Failed) else Inc(Done);
+      Res.AddPair('fixed', TJSONNumber.Create(Done));
+      if Failed > 0 then Res.AddPair('notFixed', TJSONNumber.Create(Failed));
+      Res.AddPair('note', AppliedByIdsNote(Done, Failed, Length(Unknown),
+        'issue(s)', 'were fixed', 'in the IDE buffers (not saved)') +
+        ' A missing handler is generated as an EMPTY method - in an ' +
+        'inherited form that shadows the ancestor''s handler, which is why ' +
+        'nothing is fixed without naming its id.');
+    end;
+    if not DoApply then
       Res.AddPair('note', 'Nothing was changed. Pass apply=true with "fix_ids" ' +
         'to generate the missing handlers / correct the parameter lists.');
     Result := McpOk(Res);
@@ -3554,10 +3789,10 @@ end;
 // interface to the class' ancestor list.
 function ToolExtractInterface(AArgs: TJSONObject; AStop: THandle): string;
 var
-  F, IntfName, Target, Err, RunErr, Text: string;
+  F, IntfName, Target, Err, RunErr, Text, NewBase: string;
   L1: Integer;
   Members: TArray<string>;
-  AddExisting, DoApply, Ok: Boolean;
+  AddExisting, DoApply, Ok, AddIIntf: Boolean;
   Info: TExtractInterfaceInfo;
 begin
   F := ArgStr(AArgs, 'file');
@@ -3570,17 +3805,22 @@ begin
   Target := Trim(ArgStr(AArgs, 'target_file'));
   AddExisting := ArgBool(AArgs, 'add_to_existing');
   DoApply := ArgBool(AArgs, 'apply');
+  NewBase := Trim(ArgStr(AArgs, 'change_base_to'));
+  AddIIntf := ArgBool(AArgs, 'add_iinterface');
   Members := nil;
   var MArr := AArgs.GetValue<TJSONArray>('members', nil);
   if MArr <> nil then
     for var V in MArr do Members := Members + [Trim(V.Value)];
   Ok := False;
   RunErr := '';
+  // Asked BEFORE the call: a target that was already there is EXTENDED
+  // now (user, 2026-10-17), and the answer should say which happened.
+  var TargetExisted := (Target <> '') and TFile.Exists(ExpandFileName(Target));
   if not McpRunOnMain(
     procedure
     begin
       Ok := ExtractInterfaceHeadless(F, L1, AddExisting, IntfName, Target,
-        Members, not DoApply, Info, Text, RunErr);
+        Members, not DoApply, Info, Text, RunErr, NewBase, AddIIntf);
     end, not DoApply, AStop, Err, 300000) then Exit(McpErr(Err));
   if not Ok then Exit(McpErr(RunErr));
   var Sel := TJSONArray.Create;
@@ -3599,15 +3839,51 @@ begin
   else
     Res.AddPair('target', Info.TargetFile);
   Res.AddPair('interfaceText', Text);
+  // Issue #46: the extracted interface can look perfect and the class
+  // still not compile, because a TObject descendant does not implement
+  // IInterface. The verdict is part of EVERY answer - a caller cannot
+  // check this for itself, and the compiler says it only afterwards.
+  begin
+    var II := TJSONObject.Create;
+    II.AddPair('satisfied', TJSONBool.Create(Info.IInterface.Ok));
+    II.AddPair('baseClass', Info.IInterface.BaseClass);
+    II.AddPair('reason', Info.IInterface.Reason);
+    if not Info.IInterface.Ok then
+    begin
+      var Miss := TJSONArray.Create;
+      for var M in Info.IInterface.Missing do Miss.Add(M);
+      II.AddPair('missing', Miss);
+      II.AddPair('offer', Info.IInterface.Offer);
+      if Info.IInterface.SuggestedAncestor <> '' then
+        II.AddPair('suggestedAncestor', Info.IInterface.SuggestedAncestor)
+      else
+        II.AddPair('tool', 'add_iinterface');
+    end;
+    if NewBase <> '' then
+      II.AddPair('changedBaseTo', NewBase);
+    if AddIIntf then
+      II.AddPair('addedSupport', TJSONBool.Create(True));
+    Res.AddPair('iinterface', II);
+  end;
   if DoApply then
-    Res.AddPair('note', 'The interface was written, the class got it in its ' +
+    Res.AddPair('note', IfThen(TargetExisted and not AddExisting,
+      'The target unit already existed, so the interface was ADDED to it ' +
+      'and its uses clause topped up - nothing of it was replaced. ', '') +
+      'The interface was written, the class got it in its ' +
       'ancestor list and the uses clauses were updated. Files open in the IDE ' +
-      'were changed in the buffer (not saved).')
+      'were changed in the buffer (not saved).' +
+      IfThen(not Info.IInterface.Ok,
+        ' BUT the class cannot implement an interface as it stands: ' +
+        Info.IInterface.Reason + ' - ' + Info.IInterface.Offer +
+        ' ("iinterface" says how).'))
   else
     Res.AddPair('note', 'Nothing was written. "interfaceText" is what the ' +
       'interface would look like; "members" what it would carry (pass ' +
       '"members" to choose, the default is every public and published method ' +
-      'and property). Call again with apply=true to write it.');
+      'and property). Call again with apply=true to write it.' +
+      IfThen(not Info.IInterface.Ok,
+        ' Read "iinterface" first: the class cannot implement an interface ' +
+        'as it stands.'));
   Result := McpOk(Res);
 end;
 
@@ -3723,6 +3999,205 @@ begin
   Result := McpOk(Res);
 end;
 
+// ---------------------------------------------------------------------------
+//  lsp_restart - the only way out of a session that has gone wrong without
+//  restarting the IDE (reviewing session, 2026-10-20: closing and
+//  reopening the project does not restart it, and a session that loaded a
+//  stale .dcu answers definitions without a file until it dies).
+// ---------------------------------------------------------------------------
+
+function ToolLspRestart(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Err, Was, Cfg, Why: string;
+  WasAlive, Started, Queued: Boolean;
+begin
+  var Warm := ArgBool(AArgs, 'start_again', True);
+  Was := '';
+  Cfg := '';
+  Why := '';
+  WasAlive := False;
+  Started := False;
+  Queued := False;
+  // ToolsAPI for the project paths, and Reset ends two processes - main
+  // thread, like every other state change of the manager.
+  if not McpRunOnMain(
+    procedure
+    begin
+      var M := TLspManager.Instance;
+      Was := M.SessionProjectFile;
+      WasAlive := M.IsAlive;
+      if Editor <> nil then Cfg := Editor.FindDelphiLspJson;
+      // Ends the main session AND the verification session.
+      M.Reset;
+      // ...and a tool called RESTART starts one again: the lsp_* tools
+      // deliberately never cold-start (PeekClient), so without this the
+      // session would stay down until some wizard asked for it - which
+      // the first live call of 2.4.0 ran straight into.
+      // NOT HandleProjectOpened: it debounces re-opens of the SAME project
+      // and honours PrewarmLspOnProjectOpen, so for the project that is
+      // already open it did nothing - and "restarted" still said true
+      // (reviewing session, 2026-10-20). RestartFor answers what happened.
+      if not Warm then
+        Why := 'start_again=false'
+      else if LspPrewarmerInstance = nil then
+        Why := 'the prewarmer is not installed'
+      else
+      try
+        Started := LspPrewarmerInstance.RestartFor(
+          Editor.GetCurrentProjectDproj, Queued, Why);
+      except
+        // the start is a convenience; a failure must not fail the reset
+        on E: Exception do
+          Why := 'starting it failed: ' + E.Message;
+      end;
+    end, False, AStop, Err) then Exit(McpErr(Err));
+
+  var Res := TJSONObject.Create;
+  Res.AddPair('wasRunning', TJSONBool.Create(WasAlive));
+  if Was <> '' then Res.AddPair('wasStartedFor', Was);
+  if Cfg <> '' then Res.AddPair('configuration', Cfg);
+  Res.AddPair('restarted', TJSONBool.Create(Started));
+  if Queued then Res.AddPair('queued', TJSONBool.Create(True));
+  if Why <> '' then Res.AddPair('reason', Why);
+  if Started then
+    Res.AddPair('note', 'The session is ended (the verification session ' +
+      'with it) and a new one is starting in the background for the active ' +
+      'project - get_status says when it is ready, which takes the usual ' +
+      'cold start. Use this after changing something the session reads ' +
+      'only at startup: the .delphilsp.json, the library path, LspLogging - ' +
+      'or when it has loaded .dcu files that have since been moved away.')
+  else if Queued then
+    Res.AddPair('note', 'The session is ended (the verification session ' +
+      'with it). A start that began before is still running; the new ' +
+      'session follows as soon as it has finished - get_status says when ' +
+      'it is ready.')
+  else
+    Res.AddPair('note', 'The session is ended (the verification session ' +
+      'with it), and NOT started again - "reason" says why. The lsp_* ' +
+      'tools never cold-start one by themselves, so ' +
+      'until a search, a rename or a quick fix asks for it, they will ' +
+      'answer that the session is not running.');
+  Result := McpOk(Res);
+end;
+
+// ---------------------------------------------------------------------------
+//  settings - read and write the plugin''s own options (user request
+//  2026-10-20: "entweder permanent setzen oder nur fuer die aktuelle
+//  Delphi-IDE-Instanz"). The options page is the only other way in, and a
+//  foreign session cannot click it.
+// ---------------------------------------------------------------------------
+
+function SettingKindText(AKind: TPluginSettingKind): string;
+begin
+  case AKind of
+    pskBool: Result := 'switch';
+    pskInt: Result := 'number';
+  else
+    Result := 'text';
+  end;
+end;
+
+function SettingRow(const AInfo: TPluginSettingInfo): TJSONObject;
+var
+  Persisted, Value: string;
+begin
+  Result := TJSONObject.Create;
+  Result.AddPair('name', AInfo.Name);
+  Result.AddPair('kind', SettingKindText(AInfo.Kind));
+  if TPluginSettings.GetValueText(AInfo.Name, Value) then
+    Result.AddPair('value', Value);
+  Result.AddPair('default', AInfo.DefaultText);
+  if AInfo.Choices <> '' then Result.AddPair('choices', AInfo.Choices)
+  else if AInfo.Max > AInfo.Min then
+    Result.AddPair('range', Format('%d..%d', [AInfo.Min, AInfo.Max]));
+  if TPluginSettings.IsSessionOnly(AInfo.Name, Persisted) then
+  begin
+    Result.AddPair('scope', 'session');
+    // The honest part: what comes back when this IDE closes.
+    Result.AddPair('persisted', Persisted);
+  end
+  else
+    Result.AddPair('scope', 'permanent');
+  Result.AddPair('what', AInfo.Summary);
+end;
+
+function ToolSettings(AArgs: TJSONObject; AStop: THandle): string;
+var
+  Err, RunErr, Name, Value, Scope, Before: string;
+  Session, Ok: Boolean;
+  Res: TJSONObject;
+begin
+  Name := Trim(ArgStr(AArgs, 'name'));
+  Scope := LowerCase(Trim(ArgStr(AArgs, 'scope')));
+  Ok := False;
+  RunErr := '';
+  Before := '';
+
+  if Name <> '' then
+  begin
+    if AArgs.FindValue('value') = nil then
+      Exit(McpErr('"value" is required when a "name" is given - call ' +
+        'settings without arguments to see the current values'));
+    Value := ArgStr(AArgs, 'value');
+    if (Scope <> 'permanent') and (Scope <> 'session') then
+      Exit(McpErr('"scope" must be "permanent" (stored in the registry, ' +
+        'every IDE from now on) or "session" (this IDE instance only, gone ' +
+        'when it closes) - there is no sensible default for a change that ' +
+        'may outlive the IDE'));
+    Session := Scope = 'session';
+
+    // ONE main-thread trip: the write itself is only the registry, but
+    // ApplyBlameSettings touches the editor gutter, and that is ToolsAPI.
+    if not McpRunOnMain(
+      procedure
+      begin
+        TPluginSettings.GetValueText(Name, Before);
+        Ok := TPluginSettings.SetValueText(Name, Value, RunErr);
+        if not Ok then Exit;
+        // The mark has to be set BEFORE the save: it is what makes the
+        // save keep the registry''s own value for this setting.
+        TPluginSettings.MarkSessionOnly(Name, Session);
+        if not Session then TPluginSettings.Save;
+        // The same apply the options page runs - live blame claims or
+        // hands back the gutter here, so a changed width takes effect now.
+        ApplyBlameSettings;
+      end, False, AStop, Err) then Exit(McpErr(Err));
+    if not Ok then Exit(McpErr(RunErr));
+  end;
+
+  Res := TJSONObject.Create;
+  var Arr := TJSONArray.Create;
+  for var Info in TPluginSettings.SettingInfos do
+    Arr.Add(SettingRow(Info));
+  Res.AddPair('settings', Arr);
+  Res.AddPair('registryKey', 'HKCU\' + TPluginSettings.RegistryKey);
+  if Name <> '' then
+  begin
+    var After := '';
+    TPluginSettings.GetValueText(Name, After);
+    Res.AddPair('changed', Name);
+    Res.AddPair('from', Before);
+    Res.AddPair('to', After);
+    if Session then
+      Res.AddPair('note', Name + ' is set for THIS IDE instance only: it ' +
+        'takes effect now, the registry keeps what it had, and the value ' +
+        'is gone when the IDE closes (an unrelated save elsewhere cannot ' +
+        'make it permanent either). Call again with scope=permanent to ' +
+        'keep it.')
+    else
+      Res.AddPair('note', Name + ' is stored in the registry and applies to ' +
+        'every IDE of this version from now on. Two settings need a new ' +
+        'DelphiLSP session to take effect (LspLogging, VerifySession): ' +
+        'they are read when a session starts.');
+  end
+  else
+    Res.AddPair('note', 'Nothing was changed. Pass name + value + scope ' +
+      '("permanent" or "session") to set one. "scope" per row says where ' +
+      'the current value lives; the options page in the IDE shows the same ' +
+      'settings.');
+  Result := McpOk(Res);
+end;
+
 initialization
   RegisterMcpTool('find_unit', ToolFindUnit);
   RegisterMcpTool('add_iinterface', ToolAddIInterface);
@@ -3732,6 +4207,7 @@ initialization
   RegisterMcpTool('interface_guids', ToolInterfaceGuids);
   RegisterMcpTool('line_endings', ToolLineEndings);
   RegisterMcpTool('file_encoding', ToolFileEncoding);
+  RegisterMcpTool('unused_units', ToolUnusedUnits);
   RegisterMcpTool('dfm_events', ToolDfmEvents);
   RegisterMcpTool('find_unit_references', ToolFindUnitReferences);
   RegisterMcpTool('find_original_symbol', ToolFindOriginalSymbol);
@@ -3755,6 +4231,8 @@ initialization
   RegisterMcpTool('rename_apply', ToolRenameApply);
   RegisterMcpTool('semantic_replace', ToolSemanticReplace);
   RegisterMcpTool('move_to_new_unit', ToolMoveToNewUnit);
+  RegisterMcpTool('settings', ToolSettings);
+  RegisterMcpTool('lsp_restart', ToolLspRestart);
 
 finalization
   // before the BPL unloads - the wizard holds no IDE references of its own

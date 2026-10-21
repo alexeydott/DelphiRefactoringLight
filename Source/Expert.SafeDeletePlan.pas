@@ -177,12 +177,193 @@ function DeclaredParamCount(const ALines: TArray<string>; ALine0: Integer): Inte
 /// <summary>Human-readable kind ("method", "field", ...).</summary>
 function SafeDeleteKindText(AKind: TSafeDeleteKind): string;
 
+/// <summary>The routine header at ALine0 declares AName as one of its
+///  PARAMETERS (its own name is not one). DelphiLSP answers nothing at a
+///  parameter in a declaration, so a rename started there had no anchor
+///  at all and was refused (issue #49).</summary>
+function HeaderDeclaresParameter(const ALines: TArray<string>;
+  ALine0: Integer; const AName: string): Boolean;
+
+/// <summary>The line in the routine's OTHER header on which the SAME
+///  parameter stands. A parameter is declared TWICE - in the routine's
+///  declaration and in its implementation header - and Delphi requires the
+///  two names to be identical: MEASURED with dcc32 37.0 for a class method
+///  and for a free routine, they differ and the unit does not compile
+///  (E2037 "Declaration of 'X' differs from previous declaration", plus an
+///  undeclared identifier for every use in the body). DelphiLSP answers
+///  nothing at either of the two, so nothing a rename verifies against can
+///  pair them and the second one was left behind (issue #49).
+///  ALine0 is one of the two header lines and AName one of its parameters.
+///  The answer is 0-based and need not be the partner's FIRST line - a
+///  wrapped parameter list puts the name further down.
+///  False when there is no such partner, which includes an overloaded
+///  routine whose declarations carry another name at that place, and a free
+///  routine whose only other header is a 'forward' one in the
+///  implementation section (not searched - missing it leaves the occurrence
+///  listed as unverified, which is the safe direction).</summary>
+function FindParameterPartnerLine(const ALines: TArray<string>;
+  ALine0: Integer; const AName: string; out APartnerLine0: Integer): Boolean;
+
 implementation
 
 uses
   System.Classes, System.StrUtils, System.Math, System.Generics.Collections,
   Expert.AutoImport, Expert.UnitIndex, Expert.PascalScanner,
   Expert.InterfaceLinks, Expert.SignatureEdit;
+
+// The line the routine header covering ALine0 STARTS on - ALine0 itself
+// when it is one. A wrapped parameter list is answered by DelphiLSP with
+// whatever line its range starts on, and that need not be the first (1.15.4
+// measured a declaration reported at a continuation line).
+function HeaderLineOf(const ALines: TArray<string>; ALine0: Integer): Integer;
+const
+  MaxHeaderWrap = 40;
+var
+  Kind: string;
+  IsCM: Boolean;
+  E: Integer;
+begin
+  Result := -1;
+  if (ALine0 < 0) or (ALine0 > High(ALines)) then Exit;
+  for var I := ALine0 downto Max(0, ALine0 - MaxHeaderWrap) do
+  begin
+    if not IsHeaderLine(Trim(StripLineComment(ALines[I])), Kind, IsCM) then Continue;
+    CollectHeader(ALines, I, E);
+    // the nearest header above either still covers ALine0 or ALine0 belongs
+    // to something else entirely
+    if E >= ALine0 then Result := I;
+    Exit;
+  end;
+end;
+
+// The parameter names of the routine header at ALine0, in order, and its
+// (possibly qualified) name. "A, B: Integer" is two names, which is what
+// makes the INDEX the identity of a parameter.
+function RoutineParameterNamesOf(const ALines: TArray<string>; ALine0: Integer;
+  out AQualified: string): TArray<string>;
+var
+  Kind, Q, P, R: string;
+  IsCM: Boolean;
+  E: Integer;
+begin
+  Result := nil;
+  AQualified := '';
+  ALine0 := HeaderLineOf(ALines, ALine0);
+  if ALine0 < 0 then Exit;
+  if not IsHeaderLine(Trim(StripLineComment(ALines[ALine0])), Kind, IsCM) then Exit;
+  if not ParseHeader(CollectHeader(ALines, ALine0, E), Kind, Q, P, R) then Exit;
+  AQualified := Q;
+  for var Prm in ParseParamList(P) do
+    if Prm.Name <> '' then Result := Result + [Prm.Name];
+end;
+
+// Every line of the INTERFACE section that declares the free routine ANAME.
+// Deliberately not the implementation section: a header at the outer level
+// there is the routine's own body, and pairing a parameter with another
+// OVERLOAD's body would rename a parameter nobody meant.
+function FreeRoutineDeclLines(const ALines: TArray<string>; const AName: string;
+  AUpTo: Integer): TArray<Integer>;
+begin
+  Result := nil;
+  for var I := 0 to Min(AUpTo - 1, High(ALines)) do
+  begin
+    var Raw := ALines[I];
+    if (Raw = '') or CharInSet(Raw[1], [' ', #9]) then Continue;  // a type's member
+    var Q := '';
+    RoutineParameterNamesOf(ALines, I, Q);
+    if (Q <> '') and SameText(Q, AName) then Result := Result + [I];
+  end;
+end;
+
+function HeaderDeclaresParameter(const ALines: TArray<string>;
+  ALine0: Integer; const AName: string): Boolean;
+var
+  Q: string;
+begin
+  Result := False;
+  if AName = '' then Exit;
+  for var N in RoutineParameterNamesOf(ALines, ALine0, Q) do
+    if SameText(N, AName) then Exit(True);
+end;
+
+function FindParameterPartnerLine(const ALines: TArray<string>;
+  ALine0: Integer; const AName: string; out APartnerLine0: Integer): Boolean;
+var
+  Q: string;
+  Partners: TArray<Integer>;
+begin
+  Result := False;
+  APartnerLine0 := -1;
+  if AName = '' then Exit;
+  ALine0 := HeaderLineOf(ALines, ALine0);
+  if ALine0 < 0 then Exit;
+  var Names := RoutineParameterNamesOf(ALines, ALine0, Q);
+  var Idx := -1;
+  for var I := 0 to High(Names) do
+    if SameText(Names[I], AName) then
+    begin
+      Idx := I;
+      Break;
+    end;
+  if Idx < 0 then Exit;     // the routine's own name, or a local variable
+
+  // Which of the two headers is this one? A method's implementation header
+  // carries the qualifier; a free routine's does not, so its section says.
+  var ImplLine := ImplementationLineOf(ALines);
+  var Dot := LastDelimiter('.', Q);
+  Partners := nil;
+  if (Dot > 0) or ((ImplLine <> MaxInt) and (ALine0 > ImplLine)) then
+  begin
+    if Dot > 0 then
+    begin
+      var Owner := OwnerTypeOfImplHeader(ALines[ALine0]);
+      var Member := Copy(Q, Dot + 1, MaxInt);
+      var Lt := Pos('<', Member);
+      if Lt > 0 then Member := Copy(Member, 1, Lt - 1);
+      if (Owner <> '') and (Member <> '') then
+        Partners := FindMemberDeclarationLines(string.Join(#10, ALines),
+          Owner, Member);
+    end
+    else
+      Partners := FreeRoutineDeclLines(ALines, Q, ImplLine);
+  end
+  else
+  begin
+    var L := FindImplementationOfDecl(ALines, ALine0);
+    if L >= 0 then Partners := [L];
+  end;
+
+  for var P0 in Partners do
+  begin
+    if P0 = ALine0 then Continue;
+    var Q2: string;
+    var N2 := RoutineParameterNamesOf(ALines, P0, Q2);
+    // An OVERLOAD that carries another name at that place is another
+    // routine's header - evidence only, or the rename would hit a
+    // parameter nobody meant.
+    if (Idx > High(N2)) or not SameText(N2[Idx], AName) then Continue;
+    var E2: Integer;
+    CollectHeader(ALines, P0, E2);
+    for var I := P0 to Min(E2, High(ALines)) do
+    begin
+      var S := ALines[I];
+      var From := 1;
+      if I = P0 then
+      begin
+        // never the routine's OWN name, which may be spelled like the
+        // parameter: the list starts after the '('
+        var Op := Pos('(', S);
+        if Op = 0 then Continue;
+        From := Op + 1;
+      end;
+      if HasWholeWordCI(Copy(S, From, MaxInt), AName) then
+      begin
+        APartnerLine0 := I;
+        Exit(True);
+      end;
+    end;
+  end;
+end;
 
 function DeclaredParamCount(const ALines: TArray<string>; ALine0: Integer): Integer;
 var

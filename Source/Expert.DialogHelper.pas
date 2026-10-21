@@ -365,9 +365,13 @@ begin
     Result.Position := poScreenCenter;
   Result.ClientWidth := 460;
   Result.ClientHeight := 62;
+  // alTop siblings are ordered by their TOP, not by the order they were
+  // created in - measured (scratchpad progprobe): the bar came out ABOVE
+  // the text although the label is built first. Both say where they go.
   Result.FLbl := TLabel.Create(Result);
   Result.FLbl.Parent := Result;
   Result.FLbl.AlignWithMargins := True;
+  Result.FLbl.Top := 0;
   Result.FLbl.Align := alTop;
   Result.FLbl.Margins.SetBounds(10, 8, 10, 2);
   Result.FLbl.EllipsisPosition := epPathEllipsis;
@@ -375,6 +379,7 @@ begin
   Result.FBar := TProgressBar.Create(Result);
   Result.FBar.Parent := Result;
   Result.FBar.AlignWithMargins := True;
+  Result.FBar.Top := 100;
   Result.FBar.Align := alTop;
   Result.FBar.Margins.SetBounds(10, 4, 10, 6);
   Result.FBar.Height := 18;
@@ -383,6 +388,11 @@ begin
   EnableThemes(Result);
   PrepareDialog(Result, AOwner);
   Result.Show;
+  // Show only makes it visible - it is WM_PAINT that puts the text on it,
+  // and the caller runs its scan without pumping one. Without this the
+  // window stands there as an EMPTY frame until the first Step, however
+  // long that takes (issue #47).
+  Application.ProcessMessages;
 end;
 
 procedure ShowThemedMessage(const AMsg: string);

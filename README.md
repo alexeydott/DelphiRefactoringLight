@@ -1,6 +1,6 @@
 ﻿# Delphi Refactoring Light
 
-**Version 1.28.1** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
+**Version 2.6.1** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
 
 A design-time package for **Delphi 11, 12 and 13** that connects to the built-in Delphi Language Server (`DelphiLSP.exe`) to provide a broad set of refactoring and code-analysis features directly in the editor:
 
@@ -20,8 +20,8 @@ A design-time package for **Delphi 11, 12 and 13** that connects to the built-in
 | `Ctrl+Alt+Shift+D`     | **Safe delete** &mdash; delete a method, routine, field, property, variable or constant only after proving that nothing uses it (every occurrence checked via DelphiLSP, form files, interface implementations) |
 | `Ctrl+Alt+Shift+A`     | **Align method signature** &mdash; compare a method's class/interface declaration with its implementation and highlight mismatches                   |
 | `Ctrl+Alt+Shift+W`     | **Remove with** &mdash; rewrite a `with` statement as inline-vars + qualified accesses. Menu entry and shortcut open the same small dialog to pick the scope (at cursor / current unit / selected units / project-wide); the last choice is preselected |
-| `Ctrl+Shift+M`         | **Move identifier to other unit** &mdash; move a type / class / routine / const / var to another existing unit and update consumer `uses` clauses    |
-| *(menu only)*          | **Extract / extend interface** &mdash; pick members of the class under the cursor and either extract them into a new interface (in its own `Interfaces.<Name>.pas` unit) or add them to an existing interface; the class is rewritten to implement the interface and missing accessors are synthesised |
+| `Ctrl+Shift+M`         | **Move identifier to another unit** &mdash; move a type / class / routine / const / var and update consumer `uses` clauses. One dialog settles the target: an existing project unit, or a new unit it creates and adds to the project |
+| *(menu only)*          | **Extract / extend interface** &mdash; pick members of the class under the cursor and either extract them into a new interface (in its own `Interfaces.<Name>.pas` unit) or add them to an existing interface; the class is rewritten to implement the interface and missing accessors are synthesised. The dialog also says whether the class can implement an interface **at all**: a `TObject` descendant provides no `IInterface`, so the extracted interface would be right and the class would stop compiling. Who provides it is decided from evidence &mdash; the class's own `QueryInterface` / `_AddRef` / `_Release`, then its base class up the chain (resolved through the identifier index, so a VCL or vendor base is recognised) &mdash; and the offer follows: deriving from `TInterfacedObject` is offered right there (not pre-ticked: it makes the instance reference-counted, so explicit `Free` calls have to go), while a base whose chain must stay gets the SAME offer carried out in place (QueryInterface / _AddRef / _Release and the reference counting go into the class, its ancestor stays) &mdash; both are a combo box in the dialog and arguments of the MCP tool, so the plugin does it rather than naming another command. If the target unit **already exists**, the interface is ADDED to it and its uses clause topped up (nothing is overwritten), and the new unit only ever carries the units its own members need &mdash; an interface that names nothing but built-in types gets no uses clause at all |
 | *(menu only)*          | **Add IInterface support to class** &mdash; turn a non-TInterfacedObject class (any TObject / TPersistent / TComponent descendant) into a refcount-managed class that frees itself when the last IInterface reference is dropped |
 | *(menu only)*          | **Semantic replace** &mdash; apply project-wide find / replace rules loaded from a per-project JSON file; identifier-bounded matching, comment- and string-aware, optional local-var hoisting when a rule fires multiple times in the same routine, automatic uses-clause augmentation |
 | *(menu only)*          | **Find unit for identifier** &mdash; type an identifier, see which unit(s) declare it (from a background-maintained index over the whole search path) and add the chosen unit to the current file's `uses` clause |
@@ -202,8 +202,8 @@ Nested includes are expanded too, a trailing `//` comment in an include cannot s
 
 ### Move identifier to other unit (`Ctrl+Shift+M`)
 - Place the cursor on a top-level symbol to move: **type / class / interface / record**, **routine** (`function`/`procedure`), **constant**, **variable**, or **resource string**. For classes, the move includes the class declaration *and* every method-implementation block in the same unit (matched by `TClass.Method` qualifier; overloads with the same name move together).
-- A modal dialog lists the project's other `.pas` files; pick the target unit.
-- **Move to new unit...** (separate menu entry) creates the target instead: it asks for the unit name (created next to the current unit, a full path is accepted; the default for `TCustomerList` is `CustomerList`), writes an empty unit (UTF-8 with BOM, CRLF), adds it to the project and runs the same move. When only the moved *implementation* needs identifiers that stay in the source unit, the source goes into the new unit's `implementation uses`; when the rest of the source unit still uses the moved symbol, the source gets the new unit (in its implementation uses when only its implementation needs it). When the *declaration* itself needs them (a field of a type that stays behind, say), the move is refused before anything is created &mdash; the new unit would have to use the source in its interface while the source uses the new unit, a circular unit reference. MCP tool: `move_to_new_unit`.
+- **One dialog settles the target.** *Into an existing unit*: the project's other `.pas` files, filterable, with a preview of the planned edits. *Into a new unit*: its name, suggested from the symbol (`TCustomerList` &rarr; `CustomerList`) and checked while you type &mdash; a dotted name is fine, `.pas` is added by itself, and a full path puts the unit somewhere other than next to the current one. There is no second menu entry for the new unit.
+- **A new unit** is written empty (UTF-8 with BOM, CRLF), added to the project, and then the same move runs. When only the moved *implementation* needs identifiers that stay in the source unit, the source goes into the new unit's `implementation uses`; when the rest of the source unit still uses the moved symbol, the source gets the new unit (in its implementation uses when only its implementation needs it). When the *declaration* itself needs them (a field of a type that stays behind, say), the move is refused before anything is created &mdash; the new unit would have to use the source in its interface while the source uses the new unit, a circular unit reference. That last check asks DelphiLSP, so it runs when you press **Move** and not on every keystroke; a refusal keeps the dialog open with its reason. MCP tools: `move_to_unit`, `move_to_new_unit`.
 - The engine performs the move:
   1. **Locate** the declaration range (interface section, including any preceding `type` / `var` / `const` keyword as appropriate) and the impl block range(s).
   2. **Collect required uses**: for each identifier referenced inside the moved range it asks `textDocument/definition` and records the declaring file's unit name. Identifiers that resolve to `System` (built-ins like `Length`, `IntToStr`, ...) are filtered out. Identifiers whose declaration falls **inside the moved range itself** (local vars, parameters, the symbol's own type members) are also filtered.
@@ -562,6 +562,13 @@ registers it with Claude Code. It connects Claude Code to every running IDE
 with the plugin, so rename, find references, quick fixes and the rest work
 on the IDE's live buffers.
 
+**Start with the `guide` tool.** It answers in plain text what the server can
+do &mdash; which tool for which job, all of them, grouped, plus the few rules
+that matter (the IDE buffer is the truth, `apply=false` first, an id or token
+belongs to one answer). It takes no arguments, changes nothing and is the one
+tool that works with **no IDE running**, so a session can read it before the
+IDE is up.
+
 **Every refactoring of this plugin is reachable through the bridge**: rename,
 change signature, safe delete, convert properties, semantic replace, move to
 a new or an existing unit, extract method, extract variable, extract
@@ -593,6 +600,16 @@ server's short instructions and the tool names. While **no IDE runs**, the
 bridge offers only its own two tools (`ide_instances`, `select_ide`); the
 others appear by themselves as soon as an IDE with the plugin starts, in a
 running session too.
+
+An install while a session is running used to leave that session on the
+old exe for good: Windows cannot overwrite a running program, so the
+installer moves it aside and writes the new one under the installed name -
+and no process can swap its own image. The bridge now notices between two
+requests that it has been moved aside, starts the installed exe **on its
+own stdin/stdout** and waits for it: the client keeps talking to the same
+process it started, while the new code answers, and one
+`notifications/tools/list_changed` makes it fetch the tool list again. The
+aside copies of earlier installs are deleted when the next bridge starts.
 
 Where to register it:
 - `--scope user` (the printed default): available in every Claude Code

@@ -1245,6 +1245,13 @@ begin
         if LspLine <= High(CL) then
         begin
           CaretDeclares := LineDeclaresName(CL[LspLine], FContext.WordAtCursor);
+          // ...and a routine header declares its PARAMETERS too. DelphiLSP
+          // answers nothing at one of those either, so without this a rename
+          // started ON the parameter was refused for having no anchor at all
+          // (issue #49).
+          if not CaretDeclares then
+            CaretDeclares := HeaderDeclaresParameter(CL, LspLine,
+              FContext.WordAtCursor);
           if (Length(DefLocs) > 0) and DeclarationAnswerIsForeign(CL[LspLine],
             FContext.WordAtCursor, FContext.FileName, TLspUri.FileUriToPath(DefLocs[0].Uri)) then
           begin
@@ -1427,12 +1434,38 @@ begin
       // The symbol's own positions: its declaration + implementation, and
       // those of every implementing class (interface / virtual methods).
       var Targets: TLspSymbolTargets;
+      var AnchorFile := FContext.FileName;
+      var AnchorLine := LspLine;
       if Length(DefLocs) > 0 then
+      begin
+        AnchorFile := DefFilePath;
+        AnchorLine := DefLine;
         IncCtx.AddTargetWithPartner(Targets, DefFilePath, DefLine, DefCol,
-          FContext.WordAtCursor)
+          FContext.WordAtCursor);
+      end
       else
         IncCtx.AddTargetWithPartner(Targets, FContext.FileName, LspLine, LspCol,
           FContext.WordAtCursor);
+      // A PARAMETER is declared TWICE - in the routine's declaration and in
+      // its implementation header - and Delphi requires the two names to be
+      // identical (E2037, and every use in the body becomes an undeclared
+      // identifier). DelphiLSP answers nothing at either of them, so the
+      // partner can only come from the sources; without it the rename changed
+      // one of the two and left a unit that does not compile (issue #49).
+      try
+        var PartnerLine: Integer;
+        if FindParameterPartnerLine(ReadDelphiFileLines(AnchorFile), AnchorLine,
+             FContext.WordAtCursor, PartnerLine) then
+        begin
+          Targets.Add(AnchorFile, PartnerLine);
+          FDiagLog := FDiagLog + Format('Parameter partner: %s:%d - the same ' +
+            'parameter in the routine''s other header, which Delphi requires ' +
+            'to carry the same name.%s',
+            [ExtractFileName(AnchorFile), PartnerLine + 1, sLineBreak]);
+        end;
+      except
+        // a diagnosis of the sources, never a reason to fail the rename
+      end;
       // The implementation scan is for OTHER types (interface implementers,
       // overrides in descendants). A header of the OWNER type itself that is
       // not the symbol already is a sibling OVERLOAD - forum report: renaming
