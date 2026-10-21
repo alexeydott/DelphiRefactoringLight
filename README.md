@@ -2,7 +2,7 @@
 
 **Version 1.28.1** &mdash; the same number the IDE shows in the About box, on the splash screen and in the first row of the plugin's status window, so you can tell at a glance whether your installed build is the current one.
 
-A design-time package for **Delphi 13** that connects to the built-in Delphi Language Server (`DelphiLSP.exe`) to provide a broad set of refactoring and code-analysis features directly in the editor:
+A design-time package for **Delphi 11, 12 and 13** that connects to the built-in Delphi Language Server (`DelphiLSP.exe`) to provide a broad set of refactoring and code-analysis features directly in the editor:
 
 | Shortcut               | Feature                                                                                                                                              |
 |------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -491,7 +491,7 @@ The same wizards also ship as a self-contained Windows `.exe` that runs without 
 
 ## Requirements
 
-- **Delphi 13** (BDS 37.0) &mdash; tested with the bundled `DelphiLSP.exe`. The LSP executable path is read from the registry (`HKCU\Software\Embarcadero\BDS\<version>\RootDir`) with a fallback via `IOTAServices.GetRootDirectory`, so the package works with any standard RAD Studio installation path.
+- **Delphi 11, 12 or 13** (BDS 22.0, 23.0 or 37.0). Delphi 11 uses the Win32 package and the editor-menu fallback; Delphi 12+ can use `INTAEditorLocalMenu`. The LSP executable path is read from the registry (`HKCU\Software\Embarcadero\BDS\<version>\RootDir`) with a fallback via `IOTAServices.GetRootDirectory`, so the package works with any standard RAD Studio installation path.
 - One `*.delphilsp.json` per project next to the `.dpr`/`.dpk` (see `DelphiRefactoringLight.delphilsp.json` for an example). The package hands this file to the LSP via `workspace/didChangeConfiguration`.
 
 ## Installation
@@ -507,6 +507,24 @@ The script:
 2. reads `DelphiRefactoringLight.xml`,
 3. builds `Packages\DelphiRefactoringLight.dproj` **for both IDEs** (Win32 and Win64, Release), and
 4. registers each BPL in the matching registry branch.
+
+### Delphi 11: build without IDE registration
+
+```cmd
+build-delphi11.cmd
+```
+
+The script locates Delphi 11 through its registry entry. Alternatively, pass the
+installation directory as the first argument. It rebuilds the Win32 Release
+package into `Output\Delphi11\DelphiRefactoringLight280.bpl`, with separate
+compiler output under `DCU\Delphi11`. Install that BPL through the Delphi 11
+package dialog when needed.
+
+Rename applies all token changes in each open source file through one undoable
+writer. One **Edit > Undo** restores that file's complete rename; each affected
+file has its own Undo history. Delphi 11 may require a second Redo command after
+restoring the Modified flag. Files opened only by an MCP call may be saved and
+closed by the bridge, as described in the response to `rename_apply`.
 
 ### 32-bit and 64-bit IDE
 
