@@ -22,8 +22,10 @@ type
   ///  as the default in this unit's initialization section. The
   ///  standalone executable installs a different implementation via
   ///  SetEditorImpl before any wizard runs.</summary>
-  TIDEEditorHelper = class(TInterfacedObject, IEditorHelper)
+  TIDEEditorHelper = class(TInterfacedObject, IEditorHelper, IEditorTokenEditBatch)
   public
+    function ApplyTokenEdits(const AFilePath: string;
+      const AEdits: TArray<TEditorTokenEdit>): Boolean;
     function GetCurrentContext: TEditorContext;
     function GetActiveFileName: string;
     function GetCaretLineCol(out ALine, ACol: Integer): Boolean;
@@ -142,7 +144,7 @@ type
 implementation
 
 uses
-  DesignEditors, Expert.PascalScanner;
+  DesignEditors, Expert.PascalScanner, System.Generics.Defaults;
 
 function TIDEEditorHelper.GetActiveFileName: string;
 var
@@ -695,6 +697,80 @@ begin
     Writer := nil; // Flush + Release
   end;
 
+  Result := True;
+end;
+
+function TIDEEditorHelper.ApplyTokenEdits(const AFilePath: string;
+  const AEdits: TArray<TEditorTokenEdit>): Boolean;
+type
+  TByteEdit = record
+    Offset, OldLength: Integer;
+    NewText: UTF8String;
+  end;
+var
+  Services: IOTAModuleServices;
+  Module: IOTAModule;
+  Source: IOTASourceEditor;
+  Buf: TBytes;
+  Count, Offset, Beyond, N, LastEnd: Integer;
+  Edits: TArray<TByteEdit>;
+  Writer: IOTAEditWriter;
+begin
+  RequireMainThread('ApplyTokenEdits');
+  Result := False;
+  if Length(AEdits) = 0 then Exit(True);
+  if not Supports(BorlandIDEServices, IOTAModuleServices, Services) then Exit;
+  Module := Services.FindModule(AFilePath);
+  if Module = nil then Module := OpenModuleSafe(Services, AFilePath);
+  Source := SourceEditorFor(Module, AFilePath);
+  if Source = nil then Exit;
+  Count := ReadWholeEditorBuffer(Source, Buf); // releases reader before writer
+  if Count < 0 then Exit;
+  SetLength(Edits, Length(AEdits));
+  N := 0;
+  // Validate the complete batch against one snapshot before changing anything.
+  for var Edit in AEdits do
+  begin
+    if (Edit.Line < 0) or (Edit.Column < 0) or (Edit.OldText = '') then Exit;
+    if not BufferOffsetOf(Buf, Count, Edit.Line, Edit.Column, Offset, Beyond)
+      or (Beyond <> 0) then Exit;
+    if not Utf8BufferHoldsAt(Buf, Count, Offset, Edit.OldText, True) then
+    begin
+      if (Edit.NewText <> '') and
+        Utf8BufferHoldsAt(Buf, Count, Offset, Edit.NewText, True) then Continue;
+      Exit;
+    end;
+    Edits[N].Offset := Offset;
+    Edits[N].OldLength := Length(UTF8Encode(Edit.OldText));
+    Edits[N].NewText := UTF8Encode(Edit.NewText);
+    Inc(N);
+  end;
+  SetLength(Edits, N);
+  if N = 0 then Exit(True);
+  // IOTAEditWriter positions refer to the ORIGINAL buffer and may only advance.
+  TArray.Sort<TByteEdit>(Edits, TComparer<TByteEdit>.Construct(
+    function(const L, R: TByteEdit): Integer
+    begin
+      Result := L.Offset - R.Offset;
+    end));
+  LastEnd := 0;
+  for var Edit in Edits do
+  begin
+    if Edit.Offset < LastEnd then Exit;
+    LastEnd := Edit.Offset + Edit.OldLength;
+  end;
+  Writer := Source.CreateUndoableWriter;
+  if Writer = nil then Exit;
+  try
+    for var Edit in Edits do
+    begin
+      Writer.CopyTo(Edit.Offset);
+      Writer.DeleteTo(Edit.Offset + Edit.OldLength);
+      Writer.Insert(PAnsiChar(Edit.NewText));
+    end;
+  finally
+    Writer := nil;
+  end;
   Result := True;
 end;
 
